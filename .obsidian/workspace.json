@@ -13,12 +13,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "01_小说数据/00_苍玄/00_进度.md",
+                "file": "00_通用模板/04_提示词/00_云端提示词生成器.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "00_进度"
+              "title": "00_云端提示词生成器"
             }
           }
         ]
@@ -46,7 +46,7 @@
                 "searchQuery": ""
               },
               "icon": "lucide-folder-closed",
-              "title": "ファイルエクスプローラ"
+              "title": "Files"
             }
           },
           {
@@ -179,15 +179,36 @@
   },
   "left-ribbon": {
     "hiddenItems": {
-      "switcher:クイックスイッチャーを開く": false,
-      "graph:グラフビューを開く": false,
-      "canvas:新規キャンバスを作成": false,
-      "daily-notes:今日のデイリーノートを開く": false,
-      "templates:テンプレートを挿入": false,
-      "command-palette:コマンドパレットを開く": false,
-      "bases:新規ベースを作成": false
+      "switcher:Open quick switcher": false,
+      "graph:Open graph view": false,
+      "canvas:Create new canvas": false,
+      "daily-notes:Open today's daily note": false,
+      "templates:Insert template": false,
+      "command-palette:Open command palette": false,
+      "bases:Create new base": false
     }
   },
   "active": "827d0c4628660de9",
-  "lastOpenFiles": []
+  "lastOpenFiles": [
+    "01_小说数据/00_苍玄/04_提示词/01_修炼体系提示.md",
+    "01_小说数据/00_苍玄/00_进度.md",
+    "01_小说数据/00_苍玄/05_云端回填/04_资源_云端输出.md",
+    "01_小说数据/00_苍玄/05_云端回填/01_修炼体系_云端输出.md",
+    "01_小说数据/00_苍玄/02_数据库/07_人物/07_人物.md",
+    "01_小说数据/00_苍玄/02_数据库/07_人物",
+    "01_小说数据/00_苍玄/02_数据库/04_资源/04_资源_货币.md",
+    "01_小说数据/00_苍玄/02_数据库/04_资源/04_资源_经济.md",
+    "01_小说数据/00_苍玄/02_数据库/04_资源/04_资源_符箓.md",
+    "01_小说数据/00_苍玄/02_数据库/04_资源/04_资源_秘境.md",
+    "01_小说数据/00_苍玄/02_数据库/04_资源/04_资源_法宝.md",
+    "01_小说数据/00_苍玄/02_数据库/04_资源/04_资源_材料.md",
+    "01_小说数据/00_苍玄/02_数据库/04_资源/04_资源_妖兽.md",
+    "01_小说数据/00_苍玄/02_数据库/04_资源/04_资源_功法.md",
+    "01_小说数据/00_苍玄/02_数据库/04_资源/04_资源_丹药.md",
+    "01_小说数据/00_苍玄/02_数据库/04_资源/04_资源.md",
+    "01_小说数据/00_苍玄/02_数据库/04_资源",
+    "00_通用模板/02_卡片模板/04_人物模板.md",
+    "00_通用模板/01_写作规则/04_资源.md",
+    "计划_云端提示词合并.md"
+  ]
 }
