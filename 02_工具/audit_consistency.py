@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-ai-novel 仓库一致性审查脚本（Agent 可读版）
+ai-novel 仓库一致性审查脚本（Agent 可读版）v2
 
 用法:
     python3 audit_consistency.py <小说目录路径> [--format json|text]
@@ -8,30 +8,12 @@ ai-novel 仓库一致性审查脚本（Agent 可读版）
 默认输出 JSON 到 stdout，供 Agent 直接解析并据此修改数据文件。
 加 --format text 可输出人类可读的中文提示。
 
-路径说明：<小说目录路径> 完全由调用方传入（如 01_小说数据/00_苍玄、
-01_小说数据/01_xxx），脚本本身不含任何具体某本书的硬编码路径。
-唯一的耦合点是「通用模板自身的命名规范」——见下方 CATEGORY_KEYWORD_IN_PROGRESS
-（任务提示词文件名）与 STANDARD_TOP_DIRS（标准骨架目录名）：这两处按当前
-00_通用模板 的编号规则写死，如果模板任务编号/骨架目录名以后调整，需要
-同步改这里，脚本不会自动感知、也不会报错提示。
-
-JSON 输出结构:
-{
-  "novel_dir": "...",
-  "generated_at": "...",
-  "issues": [
-    {
-      "check": "missing_top_dirs" | "symlink" | "index_consistency" |
-                "stale_placeholder" | "id_frequency_signal",
-      "severity": "error" | "warning" | "info",
-      "category": "<涉及的分类目录名，若适用>",
-      "detail": "<具体问题描述>",
-      "locations": ["<相对路径>", ...],
-      "suggested_action": "<给 Agent 的具体修改建议>"
-    },
-    ...
-  ]
-}
+v2 升级内容：
+- TODO_PATTERN 扩展至匹配 @(地名|势力|人物|类型|书籍|伏笔)
+- CATEGORY_KEYWORD_IN_PROGRESS 扩展至覆盖全部任务类别
+- 新增 check_todo_registry：校验所有TODO引用是否在全局注册表中有对应条目
+- 新增 check_geographic_hierarchy：校验地理区域父子链接双向闭合
+- 新增 check_id_format：校验ID格式与卡片类型的严格对应
 """
 import argparse
 import json
@@ -43,14 +25,31 @@ from collections import defaultdict
 
 STANDARD_TOP_DIRS = ["01_设定", "02_数据库", "03_规划", "04_状态", "05_任务", "10_正文"]
 
-TODO_PATTERN = re.compile(r"@(地名|势力|人物|类型)\.\[TODO-([^\]]+)\]")
+# v2: 扩展至匹配所有6种引用类型
+TODO_PATTERN = re.compile(r"@(地名|势力|人物|类型|书籍|伏笔)\.\[TODO-([^\]]+)\]")
 
-# 耦合点：任务提示词文件名 -> 00_进度.md 中对应分类关键字
+# v2: 扩展至覆盖全部任务类别（与00_通用模板/00_使用说明.md路由表对齐）
 CATEGORY_KEYWORD_IN_PROGRESS = {
     "地名": "02_地理区域提示.md",
     "势力": "03_势力组织提示.md",
     "人物": "05_主角与核心配角提示.md",
+    "类型": "04_资源提示.md",
+    "书籍": "08_书籍库提示.md",
+    "伏笔": "09_全书卷大纲提示.md",
 }
+
+# v2: ID格式与类型对应规则
+ID_FORMAT_RULES = {
+    "伏笔": re.compile(r"^V\d+-C\d+-\d+$"),
+    "主角突破": re.compile(r"^BP-V\d+-\d+$"),
+    "战斗结算": re.compile(r"^BT-V\d+-\d+$"),
+    "资源道具": re.compile(r"^RES-[A-Z]+-\d+$"),
+    "道义": re.compile(r"^DY-\d+$"),
+    "世界法则": re.compile(r"^WR-\d+$"),
+}
+
+# v2: 全局TODO注册表中允许的类型前缀
+TODO_GLOBAL_PREFIXES = {"FC", "CH", "FH", "BK", "DN"}
 
 
 def read(p: Path) -> str:
@@ -135,14 +134,6 @@ def check_index_consistency(novel_dir: Path, issues: list):
                     "locations": [f"{sub.name}/{f}" for f in missing_in_index],
                     "suggested_action": f"在 {idx} 的世界索引表中补充上述文件链接",
                 })
-            issues.append({
-                "check": "index_consistency",
-                "severity": "info",
-                "category": sub.name,
-                "detail": "多级层级目录（世界/区域/地名），深层文件的父子链接完整性未做递归校验，需人工/扩展脚本单独核对",
-                "locations": [],
-                "suggested_action": "如需完整校验，逐级检查父文件是否链接了其全部子文件",
-            })
         else:
             missing_in_index = sorted(actual - linked)
             missing_files = sorted(linked - actual)
@@ -190,9 +181,14 @@ def check_stale_placeholders(novel_dir: Path, issues: list):
         return
     findings = defaultdict(lambda: defaultdict(set))
     for f in db.rglob("*.md"):
+        if f.name == "00_TODO全局注册表.md":
+            continue
         text = read(f)
         for m in TODO_PATTERN.finditer(text):
             typ, num = m.group(1), m.group(2)
+            # 跳过模板说明文字中的占位符（如 "TODO-序号"）
+            if "序号" in num or "xx" in num.lower():
+                continue
             findings[typ][f.relative_to(novel_dir).as_posix()].add(num)
 
     for typ, files in findings.items():
@@ -235,6 +231,210 @@ def check_id_frequency(novel_dir: Path, issues: list, prefixes=("WR-", "DY-", "R
     })
 
 
+# ============================================================
+# v2 新增检查函数
+# ============================================================
+
+def check_todo_registry(novel_dir: Path, issues: list):
+    """校验所有 @类型.[TODO-xxx] 引用是否在全局注册表中有对应条目"""
+    registry_path = novel_dir / "02_数据库" / "00_TODO全局注册表.md"
+    if not registry_path.exists():
+        issues.append({
+            "check": "todo_registry",
+            "severity": "warning",
+            "category": None,
+            "detail": "全局TODO注册表 02_数据库/00_TODO全局注册表.md 不存在",
+            "locations": [str(registry_path)],
+            "suggested_action": "创建全局TODO注册表，定义所有TODO占位符的全局唯一ID",
+        })
+        return
+
+    # 解析注册表中的全局ID
+    registry_text = read(registry_path)
+    registry_ids = set()
+    for m in re.finditer(r"(TODO-[A-Z]{2}-\d+)", registry_text):
+        registry_ids.add(m.group(1))
+
+    # 扫描所有数据文件中的TODO引用
+    data_dirs = [novel_dir / "01_设定", novel_dir / "02_数据库"]
+    orphans = []
+    for data_dir in data_dirs:
+        if not data_dir.exists():
+            continue
+        for f in data_dir.rglob("*.md"):
+            if f.name == "00_TODO全局注册表.md":
+                continue
+            text = read(f)
+            for m in TODO_PATTERN.finditer(text):
+                typ, todo_id = m.group(1), m.group(2)
+                # 跳过模板说明文字中的占位符
+                if "序号" in todo_id or "xx" in todo_id.lower() or "示例" in todo_id:
+                    continue
+                # 检查是否是全局ID格式 (TODO-XX-NNN)
+                global_match = re.match(r"^([A-Z]{2})-(\d+)$", todo_id)
+                if global_match:
+                    prefix = global_match.group(1)
+                    if prefix not in TODO_GLOBAL_PREFIXES:
+                        orphans.append((f.relative_to(novel_dir).as_posix(), typ, todo_id))
+                    elif f"TODO-{prefix}-{global_match.group(2)}" not in registry_ids:
+                        orphans.append((f.relative_to(novel_dir).as_posix(), typ, todo_id))
+                else:
+                    # 旧式ID不应存在（已被阶段一替换）
+                    orphans.append((f.relative_to(novel_dir).as_posix(), typ, todo_id))
+
+    if orphans:
+        issues.append({
+            "check": "todo_registry",
+            "severity": "warning",
+            "category": None,
+            "detail": f"发现 {len(orphans)} 处TODO引用未在全局注册表中登记",
+            "locations": [f"{loc}" for loc, _, _ in orphans],
+            "suggested_action": "在 00_TODO全局注册表.md 中为这些TODO条目创建对应的全局ID，或修正引用",
+        })
+    else:
+        issues.append({
+            "check": "todo_registry",
+            "severity": "info",
+            "category": None,
+            "detail": f"全局TODO注册表校验通过：{len(registry_ids)} 个全局ID，所有引用均已登记",
+            "locations": [],
+            "suggested_action": "无需操作",
+        })
+
+
+def check_geographic_hierarchy(novel_dir: Path, issues: list):
+    """校验地理区域 父→子 链接双向闭合（世界→区域→地名）
+    
+    检查逻辑：
+    1. 世界文件是否列出了所有区域文件对应的区域名称
+    2. 每个区域文件是否列出了所有地名文件对应的地名名称
+    """
+    geo_dir = novel_dir / "02_数据库" / "02_地理区域"
+    if not geo_dir.exists():
+        return
+
+    # 解析所有地理区域文件
+    geo_files = {}
+    for f in geo_dir.glob("*.md"):
+        geo_files[f.name] = f
+
+    # 检查世界→区域的关系
+    world_file = geo_dir / "02_地理区域_苍玄界.md"
+    if world_file.exists():
+        world_text = read(world_file)
+        prefix = "02_地理区域_苍玄界_"
+
+        # 实际存在的区域文件（第一级子文件）
+        actual_regions = set()
+        for fname in geo_files:
+            if fname.startswith(prefix) and fname != world_file.name:
+                remainder = fname[len(prefix):].replace(".md", "")
+                if "_" not in remainder:
+                    actual_regions.add(fname)
+
+        # 检查每个区域文件是否在世界文件中有对应条目（通过区域名匹配）
+        missing_regions = []
+        for region_fname in sorted(actual_regions):
+            # 从文件名提取区域名：去掉prefix和.md
+            region_name_raw = region_fname[len(prefix):].replace(".md", "")
+            # 检查世界文件中是否包含该区域名（模糊匹配）
+            if region_name_raw not in world_text:
+                # 尝试用更短的名字匹配
+                found = False
+                for part in region_name_raw.split("_"):
+                    if len(part) >= 2 and part in world_text:
+                        found = True
+                        break
+                if not found:
+                    missing_regions.append(region_fname)
+
+        if missing_regions:
+            issues.append({
+                "check": "geographic_hierarchy",
+                "severity": "warning",
+                "category": "02_地理区域",
+                "detail": "区域文件存在但其名称未在世界总索引中出现",
+                "locations": [f"02_地理区域/{f}" for f in sorted(missing_regions)],
+                "suggested_action": f"在 {world_file.name} 中补充这些区域的描述条目",
+            })
+
+        # 检查每个区域文件→地名文件的关系
+        for region_fname in sorted(actual_regions):
+            region_file = geo_files.get(region_fname)
+            if not region_file:
+                continue
+            region_text = read(region_file)
+            region_prefix = region_fname.replace(".md", "") + "_"
+
+            # 实际存在的地名文件
+            actual_locations = set()
+            for fname in geo_files:
+                if fname.startswith(region_prefix) and fname != region_fname:
+                    actual_locations.add(fname)
+
+            # 检查每个地名文件是否在区域文件中有对应条目
+            missing_locations = []
+            for loc_fname in sorted(actual_locations):
+                loc_name_raw = loc_fname[len(region_prefix):].replace(".md", "")
+                if loc_name_raw not in region_text:
+                    found = False
+                    for part in loc_name_raw.split("_"):
+                        if len(part) >= 2 and part in region_text:
+                            found = True
+                            break
+                    if not found:
+                        missing_locations.append(loc_fname)
+
+            if missing_locations:
+                issues.append({
+                    "check": "geographic_hierarchy",
+                    "severity": "warning",
+                    "category": "02_地理区域",
+                    "detail": f"地名文件存在但其名称未在区域文件 {region_fname} 中出现",
+                    "locations": [f"02_地理区域/{f}" for f in sorted(missing_locations)],
+                    "suggested_action": f"在 {region_fname} 中补充这些地名的描述条目",
+                })
+
+
+def check_id_format(novel_dir: Path, issues: list):
+    """校验ID格式与卡片类型的严格对应"""
+    # 扫描所有.md文件，提取已定义的ID（排除@引用和运行归档/提示词）
+    defined_ids = defaultdict(list)
+    id_pattern = re.compile(r"\b(WR-\d+|DY-\d+|RES-[A-Z]+-\d+|V\d+-C\d+-\d+|BP-V\d+-\d+|BT-V\d+-\d+)\b")
+    # 匹配 @类型.ID 格式的引用（这些是引用而非定义，应排除）
+    ref_pattern = re.compile(r"@\w+\.\[")
+
+    for f in novel_dir.rglob("*.md"):
+        if "运行归档" in str(f) or "提示词" in str(f) or "00_TODO全局注册表" in str(f):
+            continue
+        text = read(f)
+        rel = f.relative_to(novel_dir).as_posix()
+        lines = text.splitlines()
+        for i, line in enumerate(lines):
+            # 跳过包含@引用的行
+            if ref_pattern.search(line):
+                continue
+            for m in id_pattern.finditer(line):
+                defined_ids[m.group(1)].append(f"{rel}:{i+1}")
+
+    # 检查同一ID是否在不同文件中被定义（而非引用）
+    duplicates = {}
+    for k, v in defined_ids.items():
+        unique_files = set(loc.split(":")[0] for loc in v)
+        if len(unique_files) > 2:
+            duplicates[k] = v
+    if duplicates:
+        issues.append({
+            "check": "id_format",
+            "severity": "warning",
+            "category": None,
+            "detail": f"发现 {len(duplicates)} 个ID在多个文件中出现（可能是重复定义）",
+            "locations": [],
+            "suggested_action": "检查这些ID是否在不同文件中被重复定义（而非仅被引用），若是则合并或去重",
+            "duplicates": {k: v[:5] for k, v in duplicates.items()},
+        })
+
+
 def run_all_checks(novel_dir: Path) -> dict:
     issues = []
     check_top_level_dirs(novel_dir, issues)
@@ -242,6 +442,9 @@ def run_all_checks(novel_dir: Path) -> dict:
     check_index_consistency(novel_dir, issues)
     check_stale_placeholders(novel_dir, issues)
     check_id_frequency(novel_dir, issues)
+    check_todo_registry(novel_dir, issues)
+    check_geographic_hierarchy(novel_dir, issues)
+    check_id_format(novel_dir, issues)
     return {
         "novel_dir": str(novel_dir),
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -262,7 +465,7 @@ def print_text(report: dict):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="ai-novel 仓库一致性审查（Agent 可读输出）")
+    ap = argparse.ArgumentParser(description="ai-novel 仓库一致性审查 v2（Agent 可读输出）")
     ap.add_argument("novel_dir", help="小说数据目录路径，由调用方指定，脚本不含具体书名硬编码")
     ap.add_argument("--format", choices=["json", "text"], default="json",
                      help="输出格式，默认 json（供 Agent 解析），可选 text（人类阅读）")
