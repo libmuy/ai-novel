@@ -40,7 +40,7 @@ CATEGORY_KEYWORD_IN_PROGRESS = {
 
 # v2: ID格式与类型对应规则
 ID_FORMAT_RULES = {
-    "伏笔": re.compile(r"^V\d+-C\d+-\d+$"),
+    "伏笔": re.compile(r"^FH-\d+$"),
     "主角突破": re.compile(r"^BP-V\d+-\d+$"),
     "战斗结算": re.compile(r"^BT-V\d+-\d+$"),
     "资源道具": re.compile(r"^RES-[A-Z]+-\d+$"),
