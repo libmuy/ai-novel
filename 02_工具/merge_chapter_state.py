@@ -26,6 +26,22 @@ import shutil
 # 04_本章状态履历.md 允许在标准 4 列之后追加的元数据列（只读，不参与 merge 计算）
 CHANGELOG_META_COLUMNS = ['章节号', '变更时间', '变更类型']
 
+# 运算-数值字段允许的「空值」写法，一律按 0 处理（不视为解析失败）
+NUMERIC_EMPTY_VALUES = {'', '无', '空', '-', '—', '~', 'null', 'N/A', '/'}
+
+
+class StateMergeError(Exception):
+    """合并过程中的阻断性数据错误：应中止本次合并、不写任何文件。"""
+    pass
+
+
+def _atomic_write(path, text):
+    """先写临时文件再 os.replace 原子替换，避免写到一半崩溃留下损坏文件。"""
+    tmp = f"{path}.tmp.{os.getpid()}"
+    with open(tmp, 'w', encoding='utf-8') as f:
+        f.write(text)
+    os.replace(tmp, path)
+
 
 def parse_md_table(file_path):
     """
@@ -94,15 +110,25 @@ def format_list(item_list):
     return ','.join(item_list)
 
 
-def parse_number(val_str):
-    """将字符串转换为 int 或 float"""
-    val_str = val_str.strip()
-    try:
-        if '.' in val_str:
-            return float(val_str)
-        return int(val_str)
-    except ValueError:
+def parse_number(val_str, obj_id=None, field=None):
+    """
+    将字符串转换为 int 或 float。
+
+    - 空值写法（无 / 空 / - 等，见 NUMERIC_EMPTY_VALUES）按 0 处理；
+    - 真正无法解析的垃圾值（如 `八十`、`+2O`）抛 StateMergeError，
+      由 merge_states 上层中止合并，绝不静默归零（否则会把笔误变成「数值突然清零」的叙事级 bug 且无法倒查）。
+    """
+    s = (val_str or '').strip()
+    core = s[1:].strip() if s[:1] in ('+', '-') else s
+    if not core or core in NUMERIC_EMPTY_VALUES or s in NUMERIC_EMPTY_VALUES:
         return 0
+    try:
+        return float(s) if '.' in s else int(s)
+    except ValueError:
+        raise StateMergeError(
+            f"数值解析失败: [{obj_id or '?'}].{field or '?'} = '{val_str}'，"
+            f"运算-数值字段的值应为 +N / -N 或纯数字"
+        )
 
 
 def _review_descriptive_change(obj_id, field, old_val, new_val, interactive):
@@ -179,14 +205,14 @@ def merge_states(initial_records, changelog_records, review_descriptive=False, i
 
         if ftype == '运算-数值':
             # 增量运算 +N 或 -N
-            old_num = parse_number(old_val)
+            old_num = parse_number(old_val, obj_id, field)
             change_str = change_val.strip()
             if change_str.startswith('+') or change_str.startswith('-'):
-                delta = parse_number(change_str)
+                delta = parse_number(change_str, obj_id, field)
                 calc_num = old_num + delta
             else:
                 # 若未带符号，作为设定值直接覆盖
-                calc_num = parse_number(change_str)
+                calc_num = parse_number(change_str, obj_id, field)
 
             # 保留整数格式或浮点格式
             if isinstance(calc_num, float) and calc_num.is_integer():
@@ -268,6 +294,29 @@ def render_md_table(records, title="本章初始状态表", note="> 由 merge_ch
     return "\n".join(lines)
 
 
+def records_diff(old_records, new_records):
+    """
+    对比两组状态记录，返回人类可读的 diff 行列表（无差异则空列表）。
+    供 rebuild_from_chapter.py 的级联预览与 audit_consistency.py 的链完整性检查共用。
+    """
+    old_map = {(r['object_id'], r['field']): r['value'] for r in old_records}
+    new_map = {(r['object_id'], r['field']): r['value'] for r in new_records}
+    lines = []
+    for k in sorted(set(old_map) | set(new_map)):
+        o = old_map.get(k)
+        n = new_map.get(k)
+        if o == n:
+            continue
+        label = f"{k[0]} | {k[1]}"
+        if o is None:
+            lines.append(f"  + [{label}] 新增: {n}")
+        elif n is None:
+            lines.append(f"  - [{label}] 移除（原值: {o}）")
+        else:
+            lines.append(f"  ~ [{label}] {o}  ->  {n}")
+    return lines
+
+
 # ---------------------------------------------------------------------------
 # 全局状态同步 (--sync-global)
 # ---------------------------------------------------------------------------
@@ -335,8 +384,7 @@ def sync_global_state(merged_records, global_dir, dry_run=False):
         if dry_run:
             logs.append(f"[dry-run] {target} <- {len(groups[prefix])} 条记录")
         else:
-            with open(target, 'w', encoding='utf-8') as f:
-                f.write(text)
+            _atomic_write(target, text)
             logs.append(f"已写入 {target}（{len(groups[prefix])} 条记录）")
 
     if unknown:
@@ -395,11 +443,16 @@ def main():
         changelog_records = parse_md_table(changelog_path)
 
     initial_records = parse_md_table(initial_path)
-    merged_records, diff_logs = merge_states(
-        initial_records, changelog_records,
-        review_descriptive=args.review_descriptive,
-        interactive=not args.dry_run,
-    )
+    try:
+        merged_records, diff_logs = merge_states(
+            initial_records, changelog_records,
+            review_descriptive=args.review_descriptive,
+            interactive=not args.dry_run,
+        )
+    except StateMergeError as e:
+        print(f"\n[阻断] 合并中止，未写入任何文件：{e}")
+        print("请修正对应 04_本章状态履历.md 中的非法值后重跑。")
+        sys.exit(2)
 
     print(f"=== 合并摘要 [{os.path.basename(os.path.dirname(initial_path))}] ===")
     print(f"初始记录数: {len(initial_records)} | 履历变更数: {len(changelog_records)} | 合并终态记录数: {len(merged_records)}")
@@ -442,8 +495,7 @@ def main():
             print(f"已备份原有目标文件至: {bak_path}")
 
         rendered_text = render_md_table(merged_records)
-        with open(output_path, 'w', encoding='utf-8') as f:
-            f.write(rendered_text)
+        _atomic_write(output_path, rendered_text)
         print(f"\n成功写入合并状态至: {output_path}")
 
     if args.sync_global:

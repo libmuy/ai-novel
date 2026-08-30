@@ -27,6 +27,9 @@ from collections import defaultdict
 
 STANDARD_TOP_DIRS = ["01_设定", "02_数据库", "03_规划", "04_全局状态", "05_工作区", "10_正文"]
 
+# 合并脚本认可的 4 种字段细分类型
+VALID_MERGE_TYPES = {"运算-数值", "运算-枚举", "运算-列表", "描述"}
+
 # v2: 扩展至匹配所有6种引用类型
 TODO_PATTERN = re.compile(r"@(地名|势力|人物|类型|书籍|伏笔)\.\[TODO-([^\]]+)\]")
 
@@ -442,6 +445,7 @@ def check_workspace_chapter_states(novel_dir: Path, issues: list):
     vocab = load_field_vocab(novel_dir)
     invalid_fields = []
     invalid_syntax = []
+    type_mismatches = []
 
     for f in workspace_dir.rglob("*.md"):
         if f.name in ["03_本章初始状态.md", "04_本章状态履历.md"]:
@@ -457,6 +461,13 @@ def check_workspace_chapter_states(novel_dir: Path, issues: list):
                     # 1. 校验字段名是否在词表中登记（若词表有内容）
                     if vocab and field not in vocab:
                         invalid_fields.append(f"{rel}:{i+1} ({field})")
+                    # 1b. 校验「类型」列是否与词表登记的权威类型一致（仅当两边都是合法细分类型时才比对）
+                    canon_type = vocab.get(field) if vocab else None
+                    if (canon_type in VALID_MERGE_TYPES
+                            and ftype in VALID_MERGE_TYPES
+                            and ftype != canon_type):
+                        type_mismatches.append(
+                            f"{rel}:{i+1} ({field}: 表内写「{ftype}」，词表登记「{canon_type}」)")
                     # 2. 校验履历表中的语法规范
                     if f.name == "04_本章状态履历.md":
                         if ftype == "运算-数值":
@@ -486,15 +497,28 @@ def check_workspace_chapter_states(novel_dir: Path, issues: list):
             "suggested_action": "修正履历表中的值语法：运算-数值须写 +N/-N，运算-列表须写 +X,-Y",
         })
 
+    if type_mismatches:
+        issues.append({
+            "check": "workspace_state_type_mismatch",
+            "severity": "warning",
+            "category": "05_工作区",
+            "detail": (
+                f"发现 {len(type_mismatches)} 处章级状态的「类型」列与 03_字段词表.md 登记的权威类型不符。"
+                "merge_chapter_state.py 目前按表内类型分派合并逻辑，类型写错会导致合并语义出错（如把数值当描述覆盖）"
+            ),
+            "locations": type_mismatches,
+            "suggested_action": "以 00_通用模板/03_字段词表.md 为准修正表内「类型」列；若词表登记本身有误，先订正词表。",
+        })
+
 
 def _load_state_helpers():
-    """惰性导入 merge_chapter_state 中的解析/合并函数（同目录脚本）。"""
+    """惰性导入 merge_chapter_state 中的解析/合并/diff 函数（同目录脚本）。"""
     try:
         sys.path.insert(0, str(Path(__file__).resolve().parent))
-        from merge_chapter_state import parse_md_table, merge_states
-        return parse_md_table, merge_states
+        from merge_chapter_state import parse_md_table, merge_states, records_diff
+        return parse_md_table, merge_states, records_diff
     except Exception:
-        return None, None
+        return None, None, None
 
 
 def find_workspace_chapter_dirs(novel_dir: Path):
@@ -518,7 +542,7 @@ def check_cascade_terminal_conflicts(novel_dir: Path, issues: list):
     - 物品终态标记为 损毁/易主 之后，后续章节履历仍变更该物品，
       或原持有者重新把该物品加回持有物品列表 -> 冲突。
     """
-    parse_state, merge_state = _load_state_helpers()
+    parse_state, merge_state, _rdiff = _load_state_helpers()
     if not parse_state:
         return
 
@@ -557,7 +581,18 @@ def check_cascade_terminal_conflicts(novel_dir: Path, issues: list):
                                 f"{rel}: {oid} 重新持有「{op[1:].strip()}」，"
                                 f"但该物品已于「{ch}」标记「{st}」")
 
-        curr, _ = merge_state(curr, cl)
+        try:
+            curr, _ = merge_state(curr, cl)
+        except Exception as e:
+            issues.append({
+                "check": "cascade_terminal_conflict",
+                "severity": "error",
+                "category": "05_工作区",
+                "detail": f"{rel} 履历合并失败，级联检查中断: {e}",
+                "locations": [rel],
+                "suggested_action": "修正该章 04_本章状态履历.md 中的非法值（如运算-数值字段的非数字值）后重跑。",
+            })
+            return
 
         chap_name = chap.name
         for rec in curr:
@@ -595,6 +630,71 @@ def check_cascade_terminal_conflicts(novel_dir: Path, issues: list):
         })
 
 
+def check_chain_integrity(novel_dir: Path, issues: list):
+    """
+    链完整性检查（标准检查项，不需要额外触发条件）：
+    逐章用「上一章 03 + 本章之前各章 04」重放，比对重放结果与实际存盘的下一章 03。
+    不一致 -> chain_drift：该章 03 可能被绕过 merge 脚本手动改动，
+    或上游某章 04 改动后未重跑 rebuild_from_chapter.py 级联重放。
+    """
+    parse_state, merge_state, rdiff = _load_state_helpers()
+    if not parse_state:
+        return
+
+    chap_dirs = find_workspace_chapter_dirs(novel_dir)
+    if len(chap_dirs) < 2:
+        return
+
+    curr = parse_state(str(chap_dirs[0] / "03_本章初始状态.md"))
+    drift_locations = []
+    drift_chapters = 0
+
+    for chap, nxt in zip(chap_dirs, chap_dirs[1:]):
+        cl_path = chap / "04_本章状态履历.md"
+        cl = parse_state(str(cl_path)) if cl_path.exists() else []
+        try:
+            curr, _ = merge_state(curr, cl)
+        except Exception as e:
+            issues.append({
+                "check": "chain_drift",
+                "severity": "error",
+                "category": "05_工作区",
+                "detail": f"{chap.name}/04 履历无法合并，链完整性检查中断: {e}",
+                "locations": [cl_path.relative_to(novel_dir).as_posix()],
+                "suggested_action": "修正该章 04_本章状态履历.md 中的非法值后重跑。",
+            })
+            return
+
+        stored = parse_state(str(nxt / "03_本章初始状态.md"))
+        d = rdiff(stored, curr)
+        if d:
+            drift_chapters += 1
+            drift_locations.append(f"{nxt.relative_to(novel_dir).as_posix()} :")
+            drift_locations.extend(d)
+        else:
+            # 存盘值即为权威，后续章节继续以存盘值为基线，避免单章漂移污染整条链的报告
+            curr = stored
+
+    if drift_locations:
+        issues.append({
+            "check": "chain_drift",
+            "severity": "warning",
+            "category": "05_工作区",
+            "detail": (
+                f"{drift_chapters} 章的 03_本章初始状态.md 与「上一章 03 + 04 履历」重放结果不一致："
+                f"该章 03 可能被绕过 merge_chapter_state.py 手动改动，"
+                f"或上游 04 履历改动后未重跑 rebuild_from_chapter.py 级联重放"
+            ),
+            "locations": drift_locations,
+            "suggested_action": (
+                "逐章确认：(1) 若 03 被手改，恢复为脚本重算结果，或把手改内容补写进对应 04 履历后重跑 merge；"
+                "(2) 若因改早期 04 导致，运行 rebuild_from_chapter.py <最早受影响章目录> 级联重放。"
+                "注意：--review-descriptive 下人工选择「保留旧值」的描述字段，必须把该决定回写进对应章 04 履历"
+                "（写成保留后的最终文本），否则本项会持续误报。"
+            ),
+        })
+
+
 def run_all_checks(novel_dir: Path) -> dict:
     issues = []
     check_top_level_dirs(novel_dir, issues)
@@ -606,6 +706,7 @@ def run_all_checks(novel_dir: Path) -> dict:
     check_geographic_hierarchy(novel_dir, issues)
     check_id_format(novel_dir, issues)
     check_workspace_chapter_states(novel_dir, issues)
+    check_chain_integrity(novel_dir, issues)
     check_cascade_terminal_conflicts(novel_dir, issues)
     return {
         "novel_dir": str(novel_dir),

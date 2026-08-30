@@ -42,7 +42,7 @@ novel-generator/
 │       ├── 05_工作区/      # 动态工作区（00_全局/、章级链式状态增量 03_本章初始状态/04_本章状态履历 与 05_任务归档）
 │       └── 10_正文/        # 定稿章节 Markdown
 ├── 02_工具/                 # 系统维护、一致性审查与量化评估脚本
-│   ├── audit_consistency.py    # 项目一致性与引用闭环审查（含级联终态冲突检查）
+│   ├── audit_consistency.py    # 项目一致性与引用闭环审查（含链完整性 chain_drift、类型一致、级联终态冲突检查）
 │   ├── merge_chapter_state.py  # 单章状态合并（--sync-global 同步 04_全局状态/）
 │   ├── migrate_global_state.py # 04_全局状态/ 初始化迁移
 │   ├── rebuild_from_chapter.py # 改早期章节后的级联重放（--dry-run 安全网）

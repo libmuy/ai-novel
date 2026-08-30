@@ -35,8 +35,11 @@ from merge_chapter_state import (  # noqa: E402
     parse_md_table,
     merge_states,
     render_md_table,
+    records_diff,
     sync_global_state,
     locate_global_state_dir,
+    _atomic_write,
+    StateMergeError,
 )
 
 STATE_FILE = "03_本章初始状态.md"
@@ -62,25 +65,6 @@ def discover_chapter_dirs(workspace_root):
             dirs.append(os.path.normpath(dirpath))
     dirs.sort()
     return dirs
-
-
-def records_diff(old_records, new_records):
-    old_map = {(r['object_id'], r['field']): r['value'] for r in old_records}
-    new_map = {(r['object_id'], r['field']): r['value'] for r in new_records}
-    lines = []
-    for k in sorted(set(old_map) | set(new_map)):
-        o = old_map.get(k)
-        n = new_map.get(k)
-        if o == n:
-            continue
-        label = f"{k[0]} | {k[1]}"
-        if o is None:
-            lines.append(f"  + [{label}] 新增: {n}")
-        elif n is None:
-            lines.append(f"  - [{label}] 移除（原值: {o}）")
-        else:
-            lines.append(f"  ~ [{label}] {o}  ->  {n}")
-    return lines
 
 
 def main():
@@ -135,9 +119,14 @@ def main():
         cl = parse_md_table(cl_path) if os.path.exists(cl_path) else []
         rel = os.path.relpath(chap, ws_root)
         print(f"--- 重放 {rel}（履历 {len(cl)} 条）---")
-        curr, diff_logs = merge_states(
-            curr, cl, review_descriptive=review, interactive=interactive,
-        )
+        try:
+            curr, diff_logs = merge_states(
+                curr, cl, review_descriptive=review, interactive=interactive,
+            )
+        except StateMergeError as e:
+            print(f"\n[阻断] {rel} 履历合并失败，级联中止，未写入任何文件：{e}")
+            print("请修正该章 04_本章状态履历.md 后重跑。")
+            sys.exit(2)
         for log in diff_logs:
             print(f"    * {log}")
 
@@ -181,8 +170,7 @@ def main():
         os.makedirs(os.path.dirname(target), exist_ok=True)
         if args.backup and os.path.exists(target):
             shutil.copyfile(target, target + ".bak")
-        with open(target, 'w', encoding='utf-8') as f:
-            f.write(render_md_table(recs))
+        _atomic_write(target, render_md_table(recs))
         print(f"已覆盖 {os.path.relpath(target, ws_root)}")
 
     if global_dir:
