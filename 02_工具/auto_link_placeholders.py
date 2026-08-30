@@ -76,7 +76,38 @@ def build_entity_map(novel_dir: Path) -> dict:
                         todo_id = m.group(1)
                         mapping[(cat, todo_id)] = f"@{cat}.[{short_name}]"
 
-    # 2. 读取 00_TODO全局注册表.md（如果有显式关联）
+    # 2. 解析 02_数据库/ 下各个卡片末尾的 ## 【TODO状态更新】 表格
+    db_dir = novel_dir / "02_数据库"
+    if db_dir.exists():
+        for f in db_dir.rglob("*.md"):
+            if f.name == "00_TODO全局注册表.md":
+                continue
+            text = f.read_text(encoding="utf-8", errors="ignore")
+            if "TODO状态更新" in text or "TODO" in text:
+                in_table = False
+                for line in text.splitlines():
+                    line_s = line.strip()
+                    if "TODO" in line_s and "状态" in line_s and "|" in line_s:
+                        in_table = True
+                        continue
+                    if in_table:
+                        if not line_s.startswith("|"):
+                            in_table = False
+                            continue
+                        if "---" in line_s:
+                            continue
+                        parts = [p.strip() for p in line_s.split("|")[1:-1]]
+                        if len(parts) >= 3:
+                            todo_id, new_name, status = parts[0], parts[1], parts[2]
+                            if todo_id.startswith("TODO-") and "已创建" in status:
+                                prefix_match = re.search(r"TODO-([A-Z]{2})-\d+", todo_id)
+                                if prefix_match:
+                                    prefix = prefix_match.group(1)
+                                    cat = TODO_PREFIX_CAT.get(prefix)
+                                    if cat:
+                                        mapping[(cat, todo_id)] = f"@{cat}.[{new_name}]"
+
+    # 3. 读取 00_TODO全局注册表.md（如果有显式关联）
     registry_file = novel_dir / "02_数据库" / "00_TODO全局注册表.md"
     if registry_file.exists():
         reg_text = registry_file.read_text(encoding="utf-8", errors="ignore")

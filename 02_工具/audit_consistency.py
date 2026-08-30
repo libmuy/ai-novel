@@ -421,12 +421,13 @@ def check_id_format(novel_dir: Path, issues: list):
         if len(unique_files) > 2:
             duplicates[k] = v
     if duplicates:
+        locs = [f"{k}: {', '.join(v[:3])}" for k, v in sorted(duplicates.items())]
         issues.append({
             "check": "id_format",
             "severity": "warning",
             "category": None,
             "detail": f"发现 {len(duplicates)} 个ID在多个文件中出现（可能是重复定义）",
-            "locations": [],
+            "locations": locs,
             "suggested_action": "检查这些ID是否在不同文件中被重复定义（而非仅被引用），若是则合并或去重",
             "duplicates": {k: v[:5] for k, v in duplicates.items()},
         })
