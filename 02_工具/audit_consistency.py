@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from collections import defaultdict
 
-STANDARD_TOP_DIRS = ["01_设定", "02_数据库", "03_规划", "05_工作区", "10_正文"]
+STANDARD_TOP_DIRS = ["01_设定", "02_数据库", "03_规划", "04_全局状态", "05_工作区", "10_正文"]
 
 # v2: 扩展至匹配所有6种引用类型
 TODO_PATTERN = re.compile(r"@(地名|势力|人物|类型|书籍|伏笔)\.\[TODO-([^\]]+)\]")
@@ -487,6 +487,114 @@ def check_workspace_chapter_states(novel_dir: Path, issues: list):
         })
 
 
+def _load_state_helpers():
+    """惰性导入 merge_chapter_state 中的解析/合并函数（同目录脚本）。"""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from merge_chapter_state import parse_md_table, merge_states
+        return parse_md_table, merge_states
+    except Exception:
+        return None, None
+
+
+def find_workspace_chapter_dirs(novel_dir: Path):
+    """返回 05_工作区/ 下所有含 03_本章初始状态.md 的章目录，按完整路径排序。"""
+    ws = novel_dir / "05_工作区"
+    if not ws.exists():
+        return []
+    dirs = sorted({p.parent for p in ws.rglob("03_本章初始状态.md")},
+                  key=lambda x: str(x))
+    return dirs
+
+
+CHAR_DEAD_STATES = {"死亡", "退场"}
+ITEM_DEAD_STATES = {"损毁", "易主"}
+
+
+def check_cascade_terminal_conflicts(novel_dir: Path, issues: list):
+    """
+    级联专用检查（改早期章节 + rebuild_from_chapter.py 级联重放后才会暴露）：
+    - 角色对象终态标记为 死亡/退场 之后，后续章节履历仍对其做状态变更 -> 冲突。
+    - 物品终态标记为 损毁/易主 之后，后续章节履历仍变更该物品，
+      或原持有者重新把该物品加回持有物品列表 -> 冲突。
+    """
+    parse_state, merge_state = _load_state_helpers()
+    if not parse_state:
+        return
+
+    chap_dirs = find_workspace_chapter_dirs(novel_dir)
+    if len(chap_dirs) < 2:
+        return  # 单章无级联，不可能出现该类冲突
+
+    curr = parse_state(str(chap_dirs[0] / "03_本章初始状态.md"))
+    dead = {}       # 角色对象ID -> 首次判定终态的章名
+    item_term = {}  # 物品对象ID -> (终态值, 章名)
+    char_conflicts = []
+    item_conflicts = []
+
+    for chap in chap_dirs:
+        cl_path = chap / "04_本章状态履历.md"
+        rel = cl_path.relative_to(novel_dir).as_posix()
+        cl = parse_state(str(cl_path)) if cl_path.exists() else []
+
+        for r in cl:
+            oid, field = r["object_id"], r["field"]
+            if oid in dead:
+                char_conflicts.append(
+                    f"{rel}: {oid} 已于「{dead[oid]}」标记终态，仍变更字段「{field}」")
+            if oid in item_term:
+                st, ch = item_term[oid]
+                item_conflicts.append(
+                    f"{rel}: {oid} 已于「{ch}」标记「{st}」，仍变更字段「{field}」")
+            if field == "持有物品" and str(r.get("type", "")).startswith("运算-列表"):
+                for op in r["value"].split(","):
+                    op = op.strip()
+                    if op.startswith("+"):
+                        key = f"物品.{op[1:].strip()}"
+                        if key in item_term:
+                            st, ch = item_term[key]
+                            item_conflicts.append(
+                                f"{rel}: {oid} 重新持有「{op[1:].strip()}」，"
+                                f"但该物品已于「{ch}」标记「{st}」")
+
+        curr, _ = merge_state(curr, cl)
+
+        chap_name = chap.name
+        for rec in curr:
+            oid = rec["object_id"]
+            if rec["field"] == "对象终态":
+                if rec["value"] in CHAR_DEAD_STATES:
+                    dead.setdefault(oid, chap_name)
+                elif oid in dead:
+                    del dead[oid]  # 复活/回归：解除终态
+            elif rec["field"] == "物品状态":
+                if rec["value"] in ITEM_DEAD_STATES:
+                    item_term.setdefault(oid, (rec["value"], chap_name))
+                elif oid in item_term:
+                    del item_term[oid]
+
+    if char_conflicts:
+        issues.append({
+            "check": "cascade_terminal_conflict",
+            "severity": "error",
+            "category": "05_工作区",
+            "detail": f"发现 {len(char_conflicts)} 处：角色终态（死亡/退场）之后仍有履历变更",
+            "locations": char_conflicts,
+            "suggested_action": "核对被修改的早期章节情节：该角色是否本不该在此章死亡/退场，"
+                                "或后续章节的履历应移除。修正对应 04 履历后重跑 rebuild_from_chapter.py",
+        })
+    if item_conflicts:
+        issues.append({
+            "check": "cascade_item_terminal_conflict",
+            "severity": "error",
+            "category": "05_工作区",
+            "detail": f"发现 {len(item_conflicts)} 处：物品终态（损毁/易主）之后仍被变更或被原持有者使用",
+            "locations": item_conflicts,
+            "suggested_action": "核对物品损毁/易主的章节：后续章节不应再变更该物品或让原持有者重新持有。"
+                                "修正对应 04 履历后重跑 rebuild_from_chapter.py",
+        })
+
+
 def run_all_checks(novel_dir: Path) -> dict:
     issues = []
     check_top_level_dirs(novel_dir, issues)
@@ -498,6 +606,7 @@ def run_all_checks(novel_dir: Path) -> dict:
     check_geographic_hierarchy(novel_dir, issues)
     check_id_format(novel_dir, issues)
     check_workspace_chapter_states(novel_dir, issues)
+    check_cascade_terminal_conflicts(novel_dir, issues)
     return {
         "novel_dir": str(novel_dir),
         "generated_at": datetime.now(timezone.utc).isoformat(),

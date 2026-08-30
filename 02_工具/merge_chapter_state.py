@@ -23,11 +23,21 @@ import argparse
 import shutil
 
 
+# 04_本章状态履历.md 允许在标准 4 列之后追加的元数据列（只读，不参与 merge 计算）
+CHANGELOG_META_COLUMNS = ['章节号', '变更时间', '变更类型']
+
+
 def parse_md_table(file_path):
     """
     解析 Markdown 状态表格文件。
-    返回列表 [{'object_id': ..., 'field': ..., 'type': ..., 'value': ...}, ...]
-    及表头/其他非表格元数据（如果存在）。
+    返回列表 [{'object_id': ..., 'field': ..., 'type': ..., 'value': ..., 'meta': {...}}, ...]
+
+    兼容两种表格形态：
+    - 4 列：| 对象ID | 字段 | 类型 | 值 |          （03_本章初始状态.md / 全局状态文件）
+    - 7 列：| 对象ID | 字段 | 类型 | 值 | 章节号 | 变更时间 | 变更类型 |  （04_本章状态履历.md）
+
+    第 5 列及之后一律作为元数据读入 record['meta']，供审计/展示使用，
+    但**不参与 merge_states 的类型合并计算**。
     """
     if not os.path.exists(file_path):
         return []
@@ -35,9 +45,6 @@ def parse_md_table(file_path):
     records = []
     with open(file_path, 'r', encoding='utf-8') as f:
         lines = f.readlines()
-
-    in_table = False
-    header_found = False
 
     for line in lines:
         stripped = line.strip()
@@ -50,16 +57,24 @@ def parse_md_table(file_path):
 
         # 检查是否为表头或分割线
         if parts[0] in ['对象ID', '对象 ID', 'ID', '---'] or parts[0].startswith(':-') or parts[0].startswith('---'):
-            header_found = True
             continue
 
-        # 正常数据行
+        # 前 4 列为合并计算所需的权威列
         obj_id, field, ftype, val = parts[0], parts[1], parts[2], parts[3]
+
+        # 第 5 列及之后：元数据列，读入但不参与合并
+        meta = {}
+        for idx, col_name in enumerate(CHANGELOG_META_COLUMNS):
+            src_idx = 4 + idx
+            if src_idx < len(parts):
+                meta[col_name] = parts[src_idx]
+
         records.append({
             'object_id': obj_id,
             'field': field,
             'type': ftype,
-            'value': val
+            'value': val,
+            'meta': meta,
         })
 
     return records
@@ -90,10 +105,35 @@ def parse_number(val_str):
         return 0
 
 
-def merge_states(initial_records, changelog_records):
+def _review_descriptive_change(obj_id, field, old_val, new_val, interactive):
+    """
+    描述类字段变更复核 hook。
+    打印「旧值 vs 新值」供人工/Agent 判断是否存在信息丢失。
+    返回 True 表示「保留旧值」（放弃本次覆盖，需人工合并），False 表示「按新值覆盖」。
+    """
+    print("\n[描述字段变更复核] --review-descriptive")
+    print(f"  对象: {obj_id} | 字段: {field}")
+    print(f"  旧值: {old_val}")
+    print(f"  新值: {new_val}")
+    if interactive and sys.stdin.isatty():
+        resp = input("  直接覆盖为新值? [Y/n]（n = 保留旧值，稍后人工合并两段描述）: ").strip().lower()
+        if resp == 'n':
+            print("  -> 已保留旧值。请人工合并后再更新本章履历，重跑合并。")
+            return True
+        print("  -> 按新值覆盖。")
+        return False
+    print("  -> 非交互模式：默认按新值覆盖。请复查上方对比，确认无信息丢失。")
+    return False
+
+
+def merge_states(initial_records, changelog_records, review_descriptive=False, interactive=True):
     """
     合并初始状态与本章履历。
     返回: (merged_records, diff_logs)
+
+    review_descriptive: 开启后，遇到「描述」类字段发生实际变更时，先打印旧值/新值对比，
+                        在交互式 TTY 下询问是否覆盖（级联重放 rebuild_from_chapter.py 默认开启）。
+    interactive:        是否允许 input() 交互（dry-run / 非 TTY 场景传 False，仅打印对比不阻塞）。
     """
     # 建立对象与字段索引：state_map[(obj_id, field)] = {'type': ..., 'value': ...}
     state_map = {}
@@ -177,8 +217,13 @@ def merge_states(initial_records, changelog_records):
             new_val = format_list(current_items)
 
         elif ftype == '描述':
-            # 整体覆盖
-            new_val = change_val.strip()
+            # 整体覆盖（可选 --review-descriptive 复核 hook）
+            proposed = change_val.strip()
+            if review_descriptive and proposed != old_val and old_val != '无':
+                keep_old = _review_descriptive_change(obj_id, field, old_val, proposed, interactive)
+                new_val = old_val if keep_old else proposed
+            else:
+                new_val = proposed
 
         else:
             # 默认覆盖
@@ -207,12 +252,12 @@ def merge_states(initial_records, changelog_records):
     return merged_records, diff_logs
 
 
-def render_md_table(records, title="本章初始状态表"):
-    """将记录渲染为标准 Markdown 表格字符串"""
+def render_md_table(records, title="本章初始状态表", note="> 由 merge_chapter_state.py 自动计算合并产出"):
+    """将记录渲染为标准 4 列 Markdown 表格字符串（初始状态 / 全局状态形态）"""
     lines = [
         f"# {title}",
         "",
-        "> 由 merge_chapter_state.py 自动计算合并产出",
+        note,
         "",
         "| 对象ID | 字段 | 类型 | 值 |",
         "| --- | --- | --- | --- |"
@@ -221,6 +266,84 @@ def render_md_table(records, title="本章初始状态表"):
         lines.append(f"| {r['object_id']} | {r['field']} | {r['type']} | {r['value']} |")
     lines.append("")
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# 全局状态同步 (--sync-global)
+# ---------------------------------------------------------------------------
+
+# 对象前缀 -> (04_全局状态/ 目标文件名, 分类中文名)
+GLOBAL_PREFIX_FILES = [
+    ("角色", "01_角色状态.md", "角色"),
+    ("物品", "02_物品状态.md", "物品"),
+    ("势力", "03_势力状态.md", "势力"),
+    ("财务", "04_财务状态.md", "财务"),
+    ("世界", "05_世界状态.md", "世界"),
+]
+
+GLOBAL_STATE_DIRNAME = "04_全局状态"
+GLOBAL_NOTE = "> 由 merge_chapter_state.py --sync-global 自动覆盖写入，请勿手工编辑。"
+
+
+def locate_global_state_dir(hint_path):
+    """
+    从给定路径向上查找小说根目录（含 02_数据库/ 或已存在 04_全局状态/），
+    返回其中的 04_全局状态 目录路径（可能尚未创建）。找不到返回 None。
+    """
+    if not hint_path:
+        return None
+    cur = os.path.abspath(hint_path)
+    if not os.path.isdir(cur):
+        cur = os.path.dirname(cur)
+    while True:
+        if (os.path.isdir(os.path.join(cur, "02_数据库"))
+                or os.path.isdir(os.path.join(cur, GLOBAL_STATE_DIRNAME))):
+            return os.path.join(cur, GLOBAL_STATE_DIRNAME)
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            return None
+        cur = parent
+
+
+def split_records_by_prefix(records):
+    """按对象前缀分组。返回 (groups: dict[prefix->list], unknown: list[object_id])"""
+    groups = {prefix: [] for prefix, _, _ in GLOBAL_PREFIX_FILES}
+    unknown = []
+    for r in records:
+        prefix = r['object_id'].split('.', 1)[0].strip()
+        if prefix in groups:
+            groups[prefix].append(r)
+        else:
+            unknown.append(r['object_id'])
+    return groups, unknown
+
+
+def sync_global_state(merged_records, global_dir, dry_run=False):
+    """
+    将合并终态按对象前缀拆分，覆盖写入 04_全局状态/ 下 5 个分类文件。
+    返回日志行列表。
+    """
+    logs = []
+    groups, unknown = split_records_by_prefix(merged_records)
+
+    if not dry_run:
+        os.makedirs(global_dir, exist_ok=True)
+
+    for prefix, fname, label in GLOBAL_PREFIX_FILES:
+        target = os.path.join(global_dir, fname)
+        text = render_md_table(groups[prefix], title=f"全局状态 · {label}", note=GLOBAL_NOTE)
+        if dry_run:
+            logs.append(f"[dry-run] {target} <- {len(groups[prefix])} 条记录")
+        else:
+            with open(target, 'w', encoding='utf-8') as f:
+                f.write(text)
+            logs.append(f"已写入 {target}（{len(groups[prefix])} 条记录）")
+
+    if unknown:
+        uniq = sorted(set(unknown))
+        logs.append(f"警告: {len(uniq)} 个对象前缀不属于五大类（角色/物品/势力/财务/世界），未同步至全局状态: {uniq}")
+
+    return logs
 
 
 def main():
@@ -232,6 +355,12 @@ def main():
     parser.add_argument("--next-chapter-dir", help="下一章目录路径 (合并结果写入其 03_本章初始状态.md)")
     parser.add_argument("--dry-run", action="store_true", help="仅计算并打印 diff，不写入文件")
     parser.add_argument("--backup", action="store_true", help="写入前备份现有目标文件为 .bak")
+    parser.add_argument("--sync-global", action="store_true",
+                        help="将合并终态按对象前缀拆分，覆盖写入 04_全局状态/ 五个分类文件")
+    parser.add_argument("--global-state-dir",
+                        help="04_全局状态/ 目录路径（缺省则从 --output/--initial 向上自动定位）")
+    parser.add_argument("--review-descriptive", action="store_true",
+                        help="描述类字段变更时先打印 旧值 vs 新值 供复核，交互式下询问是否覆盖")
 
     args = parser.parse_args()
 
@@ -248,22 +377,29 @@ def main():
     if args.next_chapter_dir and not output_path:
         output_path = os.path.join(args.next_chapter_dir, "03_本章初始状态.md")
 
-    if not initial_path or not changelog_path:
-        print("错误: 必须指定 --initial 与 --changelog 路径，或提供 --chapter-dir")
+    if not initial_path:
+        print("错误: 必须指定 --initial 路径，或提供 --chapter-dir")
         sys.exit(1)
 
     if not os.path.exists(initial_path):
         print(f"错误: 初始状态文件不存在: {initial_path}")
         sys.exit(1)
 
-    if not os.path.exists(changelog_path):
-        print(f"警告: 本章履历文件不存在: {changelog_path}，将直接继承初始状态")
+    if not changelog_path or not os.path.exists(changelog_path):
+        if changelog_path:
+            print(f"警告: 本章履历文件不存在: {changelog_path}，将直接继承初始状态")
+        else:
+            print("提示: 未指定 --changelog，按空履历处理（仅继承初始状态）")
         changelog_records = []
     else:
         changelog_records = parse_md_table(changelog_path)
 
     initial_records = parse_md_table(initial_path)
-    merged_records, diff_logs = merge_states(initial_records, changelog_records)
+    merged_records, diff_logs = merge_states(
+        initial_records, changelog_records,
+        review_descriptive=args.review_descriptive,
+        interactive=not args.dry_run,
+    )
 
     print(f"=== 合并摘要 [{os.path.basename(os.path.dirname(initial_path))}] ===")
     print(f"初始记录数: {len(initial_records)} | 履历变更数: {len(changelog_records)} | 合并终态记录数: {len(merged_records)}")
@@ -274,8 +410,25 @@ def main():
     else:
         print("\n无状态变更。")
 
+    # 全局状态同步目标目录
+    global_dir = None
+    if args.sync_global:
+        global_dir = args.global_state_dir
+        if not global_dir:
+            for hint in (initial_path, args.chapter_dir, output_path):
+                global_dir = locate_global_state_dir(hint)
+                if global_dir:
+                    break
+        if not global_dir:
+            print("\n错误: --sync-global 无法自动定位 04_全局状态/ 目录，请用 --global-state-dir 指定")
+            sys.exit(1)
+
     if args.dry_run:
         print("\n[Dry-run 模式] 未写入文件。")
+        if args.sync_global:
+            print("\n--- --sync-global 计划 ---")
+            for l in sync_global_state(merged_records, global_dir, dry_run=True):
+                print(f"  {l}")
         return
 
     if output_path:
@@ -292,6 +445,11 @@ def main():
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write(rendered_text)
         print(f"\n成功写入合并状态至: {output_path}")
+
+    if args.sync_global:
+        print("\n--- --sync-global：覆盖写入 04_全局状态/ ---")
+        for l in sync_global_state(merged_records, global_dir, dry_run=False):
+            print(f"  {l}")
 
 
 if __name__ == "__main__":
