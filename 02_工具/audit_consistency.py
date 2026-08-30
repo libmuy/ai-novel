@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-ai-novel 仓库一致性审查脚本（Agent 可读版）v2
+ai-novel 仓库一致性审查脚本（Agent 可读版）v2.1
 
 用法:
     python3 audit_consistency.py <小说目录路径> [--format json|text]
@@ -8,22 +8,24 @@ ai-novel 仓库一致性审查脚本（Agent 可读版）v2
 默认输出 JSON 到 stdout，供 Agent 直接解析并据此修改数据文件。
 加 --format text 可输出人类可读的中文提示。
 
-v2 升级内容：
+升级内容：
+- 支持 05_工作区/ 架构，校验章级状态文件（03_本章初始状态.md, 04_本章状态履历.md）中的字段合法性与履历语法；
 - TODO_PATTERN 扩展至匹配 @(地名|势力|人物|类型|书籍|伏笔)
 - CATEGORY_KEYWORD_IN_PROGRESS 扩展至覆盖全部任务类别
-- 新增 check_todo_registry：校验所有TODO引用是否在全局注册表中有对应条目
-- 新增 check_geographic_hierarchy：校验地理区域父子链接双向闭合
-- 新增 check_id_format：校验ID格式与卡片类型的严格对应
+- check_todo_registry：校验所有TODO引用是否在全局注册表中有对应条目
+- check_geographic_hierarchy：校验地理区域父子链接双向闭合
+- check_id_format：校验ID格式与卡片类型的严格对应
 """
 import argparse
 import json
 import re
 import sys
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from collections import defaultdict
 
-STANDARD_TOP_DIRS = ["01_设定", "02_数据库", "03_规划", "04_状态", "05_任务", "10_正文"]
+STANDARD_TOP_DIRS = ["01_设定", "02_数据库", "03_规划", "05_工作区", "10_正文"]
 
 # v2: 扩展至匹配所有6种引用类型
 TODO_PATTERN = re.compile(r"@(地名|势力|人物|类型|书籍|伏笔)\.\[TODO-([^\]]+)\]")
@@ -54,6 +56,30 @@ TODO_GLOBAL_PREFIXES = {"FC", "CH", "FH", "BK", "DN"}
 
 def read(p: Path) -> str:
     return p.read_text(encoding="utf-8", errors="ignore")
+
+
+def load_field_vocab(novel_dir: Path):
+    """加载 00_通用模板/03_字段词表.md 中的合法字段名与类型 mapping"""
+    vocab_path = novel_dir / "00_通用模板" / "03_字段词表.md"
+    if not vocab_path.exists():
+        vocab_path = novel_dir.parent.parent / "00_通用模板" / "03_字段词表.md"
+    if not vocab_path.exists():
+        return {}
+
+    text = read(vocab_path)
+    fields = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line.startswith("|") or "---" in line or "字段名" in line:
+            continue
+        parts = [p.strip() for p in line.split("|")[1:-1]]
+        if len(parts) >= 2:
+            raw_fname = parts[0]
+            # 清理 Markdown 粗体 **字段名** 语法
+            clean_fname = raw_fname.replace("**", "").strip()
+            ftype = parts[1]
+            fields[clean_fname] = ftype
+    return fields
 
 
 def check_top_level_dirs(novel_dir: Path, issues: list):
@@ -186,7 +212,6 @@ def check_stale_placeholders(novel_dir: Path, issues: list):
         text = read(f)
         for m in TODO_PATTERN.finditer(text):
             typ, num = m.group(1), m.group(2)
-            # 跳过模板说明文字中的占位符（如 "TODO-序号"）
             if "序号" in num or "xx" in num.lower():
                 continue
             findings[typ][f.relative_to(novel_dir).as_posix()].add(num)
@@ -231,10 +256,6 @@ def check_id_frequency(novel_dir: Path, issues: list, prefixes=("WR-", "DY-", "R
     })
 
 
-# ============================================================
-# v2 新增检查函数
-# ============================================================
-
 def check_todo_registry(novel_dir: Path, issues: list):
     """校验所有 @类型.[TODO-xxx] 引用是否在全局注册表中有对应条目"""
     registry_path = novel_dir / "02_数据库" / "00_TODO全局注册表.md"
@@ -249,13 +270,11 @@ def check_todo_registry(novel_dir: Path, issues: list):
         })
         return
 
-    # 解析注册表中的全局ID
     registry_text = read(registry_path)
     registry_ids = set()
     for m in re.finditer(r"(TODO-[A-Z]{2}-\d+)", registry_text):
         registry_ids.add(m.group(1))
 
-    # 扫描所有数据文件中的TODO引用
     data_dirs = [novel_dir / "01_设定", novel_dir / "02_数据库"]
     orphans = []
     for data_dir in data_dirs:
@@ -267,10 +286,8 @@ def check_todo_registry(novel_dir: Path, issues: list):
             text = read(f)
             for m in TODO_PATTERN.finditer(text):
                 typ, todo_id = m.group(1), m.group(2)
-                # 跳过模板说明文字中的占位符
                 if "序号" in todo_id or "xx" in todo_id.lower() or "示例" in todo_id:
                     continue
-                # 检查是否是全局ID格式 (TODO-XX-NNN)
                 global_match = re.match(r"^([A-Z]{2})-(\d+)$", todo_id)
                 if global_match:
                     prefix = global_match.group(1)
@@ -279,7 +296,6 @@ def check_todo_registry(novel_dir: Path, issues: list):
                     elif f"TODO-{prefix}-{global_match.group(2)}" not in registry_ids:
                         orphans.append((f.relative_to(novel_dir).as_posix(), typ, todo_id))
                 else:
-                    # 旧式ID不应存在（已被阶段一替换）
                     orphans.append((f.relative_to(novel_dir).as_posix(), typ, todo_id))
 
     if orphans:
@@ -303,28 +319,20 @@ def check_todo_registry(novel_dir: Path, issues: list):
 
 
 def check_geographic_hierarchy(novel_dir: Path, issues: list):
-    """校验地理区域 父→子 链接双向闭合（世界→区域→地名）
-    
-    检查逻辑：
-    1. 世界文件是否列出了所有区域文件对应的区域名称
-    2. 每个区域文件是否列出了所有地名文件对应的地名名称
-    """
+    """校验地理区域 父→子 链接双向闭合（世界→区域→地名）"""
     geo_dir = novel_dir / "02_数据库" / "02_地理区域"
     if not geo_dir.exists():
         return
 
-    # 解析所有地理区域文件
     geo_files = {}
     for f in geo_dir.glob("*.md"):
         geo_files[f.name] = f
 
-    # 检查世界→区域的关系
     world_file = geo_dir / "02_地理区域_苍玄界.md"
     if world_file.exists():
         world_text = read(world_file)
         prefix = "02_地理区域_苍玄界_"
 
-        # 实际存在的区域文件（第一级子文件）
         actual_regions = set()
         for fname in geo_files:
             if fname.startswith(prefix) and fname != world_file.name:
@@ -332,14 +340,10 @@ def check_geographic_hierarchy(novel_dir: Path, issues: list):
                 if "_" not in remainder:
                     actual_regions.add(fname)
 
-        # 检查每个区域文件是否在世界文件中有对应条目（通过区域名匹配）
         missing_regions = []
         for region_fname in sorted(actual_regions):
-            # 从文件名提取区域名：去掉prefix和.md
             region_name_raw = region_fname[len(prefix):].replace(".md", "")
-            # 检查世界文件中是否包含该区域名（模糊匹配）
             if region_name_raw not in world_text:
-                # 尝试用更短的名字匹配
                 found = False
                 for part in region_name_raw.split("_"):
                     if len(part) >= 2 and part in world_text:
@@ -358,7 +362,6 @@ def check_geographic_hierarchy(novel_dir: Path, issues: list):
                 "suggested_action": f"在 {world_file.name} 中补充这些区域的描述条目",
             })
 
-        # 检查每个区域文件→地名文件的关系
         for region_fname in sorted(actual_regions):
             region_file = geo_files.get(region_fname)
             if not region_file:
@@ -366,13 +369,11 @@ def check_geographic_hierarchy(novel_dir: Path, issues: list):
             region_text = read(region_file)
             region_prefix = region_fname.replace(".md", "") + "_"
 
-            # 实际存在的地名文件
             actual_locations = set()
             for fname in geo_files:
                 if fname.startswith(region_prefix) and fname != region_fname:
                     actual_locations.add(fname)
 
-            # 检查每个地名文件是否在区域文件中有对应条目
             missing_locations = []
             for loc_fname in sorted(actual_locations):
                 loc_name_raw = loc_fname[len(region_prefix):].replace(".md", "")
@@ -398,26 +399,22 @@ def check_geographic_hierarchy(novel_dir: Path, issues: list):
 
 def check_id_format(novel_dir: Path, issues: list):
     """校验ID格式与卡片类型的严格对应"""
-    # 扫描所有.md文件，提取已定义的ID（排除@引用和运行归档/提示词）
     defined_ids = defaultdict(list)
     id_pattern = re.compile(r"\b(WR-\d+|DY-\d+|RES-[A-Z]+-\d+|V\d+-C\d+-\d+|BP-V\d+-\d+|BT-V\d+-\d+)\b")
-    # 匹配 @类型.ID 格式的引用（这些是引用而非定义，应排除）
     ref_pattern = re.compile(r"@\w+\.\[")
 
     for f in novel_dir.rglob("*.md"):
-        if "运行归档" in str(f) or "提示词" in str(f) or "00_TODO全局注册表" in str(f):
+        if "05_工作区" in str(f) or "00_TODO全局注册表" in str(f):
             continue
         text = read(f)
         rel = f.relative_to(novel_dir).as_posix()
         lines = text.splitlines()
         for i, line in enumerate(lines):
-            # 跳过包含@引用的行
             if ref_pattern.search(line):
                 continue
             for m in id_pattern.finditer(line):
                 defined_ids[m.group(1)].append(f"{rel}:{i+1}")
 
-    # 检查同一ID是否在不同文件中被定义（而非引用）
     duplicates = {}
     for k, v in defined_ids.items():
         unique_files = set(loc.split(":")[0] for loc in v)
@@ -435,6 +432,60 @@ def check_id_format(novel_dir: Path, issues: list):
         })
 
 
+def check_workspace_chapter_states(novel_dir: Path, issues: list):
+    """校验 05_工作区/ 中章级状态文件字段合法性与履历语法"""
+    workspace_dir = novel_dir / "05_工作区"
+    if not workspace_dir.exists():
+        return
+
+    vocab = load_field_vocab(novel_dir)
+    invalid_fields = []
+    invalid_syntax = []
+
+    for f in workspace_dir.rglob("*.md"):
+        if f.name in ["03_本章初始状态.md", "04_本章状态履历.md"]:
+            rel = f.relative_to(novel_dir).as_posix()
+            lines = read(f).splitlines()
+            for i, line in enumerate(lines):
+                line = line.strip()
+                if not line.startswith("|") or "---" in line or "对象ID" in line:
+                    continue
+                parts = [p.strip() for p in line.split("|")[1:-1]]
+                if len(parts) >= 4:
+                    obj_id, field, ftype, val = parts[0], parts[1], parts[2], parts[3]
+                    # 1. 校验字段名是否在词表中登记（若词表有内容）
+                    if vocab and field not in vocab:
+                        invalid_fields.append(f"{rel}:{i+1} ({field})")
+                    # 2. 校验履历表中的语法规范
+                    if f.name == "04_本章状态履历.md":
+                        if ftype == "运算-数值":
+                            if not (val.startswith("+") or val.startswith("-") or val.isdigit()):
+                                invalid_syntax.append(f"{rel}:{i+1} (数值履历缺乏 +/- 前缀: '{val}')")
+                        elif ftype == "运算-列表":
+                            if not (val.startswith("+") or val.startswith("-") or "," in val or val in ["无", "空"]):
+                                invalid_syntax.append(f"{rel}:{i+1} (列表履历格式非 +X,-Y: '{val}')")
+
+    if invalid_fields:
+        issues.append({
+            "check": "workspace_state_fields",
+            "severity": "error",
+            "category": "05_工作区",
+            "detail": f"发现 {len(invalid_fields)} 处章级状态使用了未在 03_字段词表.md 中登记的字段",
+            "locations": invalid_fields,
+            "suggested_action": "对照 00_通用模板/03_字段词表.md 修正字段名，或在词表中补充注册",
+        })
+
+    if invalid_syntax:
+        issues.append({
+            "check": "workspace_state_syntax",
+            "severity": "error",
+            "category": "05_工作区",
+            "detail": f"发现 {len(invalid_syntax)} 处章级状态履历未遵循固定计算语法",
+            "locations": invalid_syntax,
+            "suggested_action": "修正履历表中的值语法：运算-数值须写 +N/-N，运算-列表须写 +X,-Y",
+        })
+
+
 def run_all_checks(novel_dir: Path) -> dict:
     issues = []
     check_top_level_dirs(novel_dir, issues)
@@ -445,6 +496,7 @@ def run_all_checks(novel_dir: Path) -> dict:
     check_todo_registry(novel_dir, issues)
     check_geographic_hierarchy(novel_dir, issues)
     check_id_format(novel_dir, issues)
+    check_workspace_chapter_states(novel_dir, issues)
     return {
         "novel_dir": str(novel_dir),
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -465,7 +517,7 @@ def print_text(report: dict):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="ai-novel 仓库一致性审查 v2（Agent 可读输出）")
+    ap = argparse.ArgumentParser(description="ai-novel 仓库一致性审查 v2.1（Agent 可读输出）")
     ap.add_argument("novel_dir", help="小说数据目录路径，由调用方指定，脚本不含具体书名硬编码")
     ap.add_argument("--format", choices=["json", "text"], default="json",
                      help="输出格式，默认 json（供 Agent 解析），可选 text（人类阅读）")
