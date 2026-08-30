@@ -4,20 +4,19 @@
 """
 章级状态合并工具 (merge_chapter_state.py)
 
-把某一章的 `04_本章状态履历.md` 折叠进小说的唯一权威状态存储 `04_全局状态/`
+把某一章的 `04_本章状态履历.md` 折叠进小说的唯一权威状态存储 `05_工作区/00_全局/01_最新状态/`
 （每对象一文件、按类目分层的目录树）。
 
 模型
 ----
-- `04_全局状态/` == 冻结基线 `05_工作区/00_全局/00_基线状态/` ⊕（按章节路径顺序
+- `05_工作区/00_全局/01_最新状态/` == 冻结基线 `05_工作区/00_全局/00_基线状态/` ⊕（按章节路径顺序
   折叠全部 `04_本章状态履历.md`）。
 - 本工具**始终从基线全量重折**到 `--chapter-dir` 对应的那一章（不做增量）：
   基线不可变 → 重折幂等自愈；每个履历极小、纯 Python，重放不调 LLM。
 - 运算-数值 / 运算-枚举 / 运算-列表：纯 Python，确定性。
 - 「描述」类字段发生实质变更时：把本次全部待合并描述字段打包成**一次** LLM 调用
-  （旧文本 + 新文本合并不丢信息），合并结果写回 `04_全局状态/` **并冻结回写**该章
-  `04_本章状态履历.md`（「值」列换成合并文本、「变更类型」列改 `描述合并`），
-  之后重放/审计按字面覆盖、不再调 LLM。
+  （旧文本 + 新文本合并不丢信息），合并结果写进独立的 append-only 缓存
+  `00_描述合并缓存.jsonl`，**永不修改履历原文**。
 - LLM 不可用（无配置 / 无 key / 网络失败）且本章确有待合并描述变更 → 中止合并、
   退出码 2、**不写任何文件**。纯运算章节无需 key。
 
@@ -25,10 +24,10 @@
 ----
     python3 02_工具/merge_chapter_state.py --chapter-dir <章目录> [选项]
 
-      --chapter-dir PATH   必填，要并入 04_全局状态/ 的那一章
+      --chapter-dir PATH   必填，要并入 05_工作区/00_全局/01_最新状态/ 的那一章
       --novel-dir PATH     可选，缺省从 --chapter-dir 向上自动定位
       --dry-run            计算（含调一次 LLM 预览合并文本）+ 打印 diff，不写任何文件
-      --backup             写前把 04_全局状态/ 整目录与该章 04 备份为 .bak
+      --backup/--no-backup 写前是否备份（默认开启备份）
       --no-llm             本章若有待合并描述变更 -> 直接中止、退出码 2（不调 LLM）
       --force              允许并入非「工作区最新章」
 """
@@ -43,7 +42,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import state_tree as st  # noqa: E402
 import _llm  # noqa: E402
 
-# 向后兼容 re-export（其它脚本/外部调用可能仍按旧名 import）
 from state_tree import (  # noqa: E402,F401
     parse_md_table,
     merge_states,
@@ -58,6 +56,9 @@ from state_tree import (  # noqa: E402,F401
     CHANGELOG_META_COLUMNS,
     NUMERIC_EMPTY_VALUES,
     CHANGELOG_FILENAME,
+    load_merge_cache,
+    append_merge_cache,
+    value_fingerprint,
 )
 
 _REMOVED_ARGS = [
@@ -86,13 +87,15 @@ def _make_llm_resolver(tools_dir):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="章级状态合并工具（把本章履历折叠进 04_全局状态/）")
-    ap.add_argument("--chapter-dir", required=True, help="要并入 04_全局状态/ 的那一章目录")
+    ap = argparse.ArgumentParser(description="章级状态合并工具（把本章履历折叠进 01_最新状态/）")
+    ap.add_argument("--chapter-dir", required=True, help="要并入 01_最新状态/ 的那一章目录")
     ap.add_argument("--novel-dir", help="小说根目录（缺省从 --chapter-dir 向上自动定位）")
     ap.add_argument("--dry-run", action="store_true",
                     help="计算 + 调一次 LLM 预览合并文本 + 打印 diff，不写任何文件")
-    ap.add_argument("--backup", action="store_true",
-                    help="写前把 04_全局状态/ 整目录与该章 04 备份为 .bak")
+    ap.add_argument("--backup", action="store_true", default=True,
+                    help="写前备份（默认开启）")
+    ap.add_argument("--no-backup", action="store_true",
+                    help="关闭写前备份")
     ap.add_argument("--no-llm", action="store_true",
                     help="本章若有待合并描述变更则直接中止（退出码 2），不调 LLM")
     ap.add_argument("--force", action="store_true", help="允许并入非工作区最新章")
@@ -116,11 +119,11 @@ def main():
 
     novel_dir = os.path.abspath(args.novel_dir) if args.novel_dir else st.find_novel_dir(chapter_dir)
     if not novel_dir:
-        print("错误: 无法定位小说根目录（需含 04_全局状态/ 或 02_数据库/），请用 --novel-dir 指定")
+        print("错误: 无法定位小说根目录（需含 02_数据库/ 和 05_工作区/），请用 --novel-dir 指定")
         sys.exit(1)
 
     baseline = st.baseline_dir(novel_dir)
-    live = st.global_state_dir(novel_dir)
+    live = st.latest_state_dir(novel_dir)
     if not os.path.isdir(baseline):
         print(f"错误: 冻结基线不存在: {baseline}\n"
               f"先用技能 08_基线状态初始化 生成基线（新书），或 migrate_state_layout.py 迁移（旧书）。")
@@ -140,9 +143,12 @@ def main():
 
     paths = changelogs[:idx + 1]
     resolver = None if args.no_llm else _make_llm_resolver(tools_dir)
+    cache = st.load_merge_cache(novel_dir)
+    chapter_names = [st.chapter_rel_name(p, novel_dir) for p in paths]
 
     try:
-        records, writebacks = st.fold_all(baseline, paths, resolver=resolver)
+        records, new_entries = st.fold_all(baseline, paths, cache=cache,
+                                           resolver=resolver, chapter_names=chapter_names)
     except StateMergeError as e:
         print(f"\n[阻断] 合并中止，未写入任何文件：{e}")
         sys.exit(2)
@@ -152,24 +158,23 @@ def main():
     diff = records_diff(live_before, records)
 
     print(f"=== 合并摘要 [{folded_chapter}] ===")
-    print(f"折叠章数: {len(paths)} | 折叠终态记录数: {len(records)} | 04_全局状态/ 现有记录数: {len(live_before)}")
+    print(f"折叠章数: {len(paths)} | 折叠终态记录数: {len(records)} | 01_最新状态/ 现有记录数: {len(live_before)}")
     if diff:
-        print("\n--- 04_全局状态/ 将变更 ---")
+        print("\n--- 01_最新状态/ 将变更 ---")
         for line in diff:
             print(line)
     else:
-        print("\n04_全局状态/ 无变化。")
+        print("\n01_最新状态/ 无变化。")
 
-    if writebacks:
-        print("\n--- 描述字段已由 LLM 合并，将冻结回写以下履历 ---")
-        for p in writebacks:
-            print(f"  {st.chapter_rel_name(p, novel_dir)}/{CHANGELOG_FILENAME}")
+    if new_entries:
+        print(f"\n--- 描述字段合并缓存将追加 {len(new_entries)} 条 ---")
 
     if args.dry_run:
         print("\n[Dry-run] 未写入任何文件。")
         return
 
-    if args.backup:
+    do_backup = not args.no_backup
+    if do_backup:
         if os.path.isdir(live):
             bak = live.rstrip("/") + ".bak"
             if os.path.isdir(bak):
@@ -179,11 +184,8 @@ def main():
         if os.path.exists(target_cl):
             shutil.copyfile(target_cl, target_cl + ".bak")
 
-    # 写序：先冻结履历 -> 再写状态树 -> 最后 manifest（由 write_state_tree 负责）
-    for path, text in writebacks.items():
-        _atomic_write(path, text)
-        print(f"已冻结回写 {st.chapter_rel_name(path, novel_dir)}/{CHANGELOG_FILENAME}")
-
+    # 写序：先缓存落盘 → 再写状态树
+    st.append_merge_cache(novel_dir, new_entries)
     for line in st.write_state_tree(live, records, folded_chapter=folded_chapter,
                                    tool="merge_chapter_state.py"):
         print(f"  {line}")

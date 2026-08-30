@@ -10,8 +10,8 @@ audit_consistency.py 共用。**纯 Python 标准库、无网络、无 LLM。**
 
 数据模型
 --------
-- 唯一权威状态存储 = 小说目录下 `04_全局状态/`，按对象类别分子目录：
-    04_全局状态/
+- 唯一权威状态存储 = 小说目录下 `05_工作区/00_全局/01_最新状态/`，按对象类别分子目录：
+    05_工作区/00_全局/01_最新状态/
       ├── 00_说明.md            手写
       ├── 00_同步状态.md         本模块写（manifest，非权威）
       ├── 01_角色/  01_角色.md（索引）  01_角色_<名>.md ...
@@ -21,13 +21,14 @@ audit_consistency.py 共用。**纯 Python 标准库、无网络、无 LLM。**
       ├── 05_世界/  ...
       └── 99_其他/  ...          前缀不属五大类的兜底
 - 冻结基线 = `05_工作区/00_全局/00_基线状态/`，布局同上，只读不可变。
-- `04_全局状态/` == 基线 ⊕（按章节路径顺序折叠全部 `04_本章状态履历.md`）。
+- `05_工作区/00_全局/01_最新状态/` == 基线 ⊕（按章节路径顺序折叠全部 `04_本章状态履历.md`）。
 - 每章目录只有 `04_本章状态履历.md`（7 列：前 4 列权威 + 章节号/变更时间/变更类型 元数据）。
 """
 
 import os
 import re
 import hashlib
+import json
 from collections import OrderedDict
 from datetime import datetime, timezone
 
@@ -36,9 +37,9 @@ from datetime import datetime, timezone
 # 常量
 # ---------------------------------------------------------------------------
 
-GLOBAL_STATE_DIRNAME = "04_全局状态"
 WORKSPACE_DIRNAME = "05_工作区"
 BASELINE_SUBPATH = os.path.join("05_工作区", "00_全局", "00_基线状态")
+LATEST_STATE_SUBPATH = os.path.join("05_工作区", "00_全局", "01_最新状态")
 CHANGELOG_FILENAME = "04_本章状态履历.md"
 LEGACY_CHAPTER_STATE_FILENAME = "03_本章初始状态.md"
 MANIFEST_FILENAME = "00_同步状态.md"
@@ -47,14 +48,16 @@ NONE_MARKER = "__none__"
 # 04_本章状态履历.md 在标准 4 列之后追加的元数据列（读入但不参与合并计算）
 CHANGELOG_META_COLUMNS = ['章节号', '变更时间', '变更类型']
 
-# 描述字段变更被 LLM 合并并冻结后，元数据「变更类型」列写这个值；
-# 之后重放/审计一律按字面整体覆盖，不再触发 LLM。
-DESCRIPTIVE_MERGED_MARK = '描述合并'
-
 # 运算-数值字段允许的「空值」写法，一律按 0 处理（不视为解析失败）
 NUMERIC_EMPTY_VALUES = {'', '无', '空', '-', '—', '~', 'null', 'N/A', '/'}
 
-# 对象 ID 前缀 -> 04_全局状态/ 下的类目目录名
+# 合并脚本认可的 4 种字段细分类型（与 audit_consistency.VALID_MERGE_TYPES 保持一致）
+VALID_MERGE_TYPES = {"运算-数值", "运算-枚举", "运算-列表", "描述"}
+
+# 描述合并缓存
+MERGE_CACHE_FILENAME = "00_描述合并缓存.jsonl"
+
+# 对象 ID 前缀 -> 05_工作区/00_全局/01_最新状态/ 下的类目目录名
 CATEGORY_BY_PREFIX = {
     "角色": "01_角色",
     "物品": "02_物品",
@@ -96,13 +99,12 @@ def _atomic_write(path, text):
 # Markdown 表格 解析 / 渲染
 # ---------------------------------------------------------------------------
 
-def parse_md_table(file_path):
+def parse_md_table(file_path, *, strict=True):
     """
-    解析 Markdown 状态表格文件。
-    返回 [{'object_id', 'field', 'type', 'value', 'meta': {...}}, ...]
-
-    兼容 4 列（对象文件 / 基线文件 / 卷末快照）与 7 列（04_本章状态履历.md）。
-    第 5 列及之后作为元数据读入 record['meta']，不参与合并计算。
+    解析 Markdown 状态表格。兼容 4 列（状态文件）与 7 列（履历）。
+    strict=True 时，表格区内任何列数不符或类型非法的行都抛 StateMergeError，
+    绝不静默丢弃——静默丢行是状态腐烂的头号来源。
+    值内的竖线写作 \\| ，解析时还原。
     """
     if not os.path.exists(file_path):
         return []
@@ -111,20 +113,39 @@ def parse_md_table(file_path):
     with open(file_path, 'r', encoding='utf-8') as f:
         lines = f.readlines()
 
-    for line in lines:
+    for lineno, line in enumerate(lines, 1):
         stripped = line.strip()
         if not stripped.startswith('|'):
             continue
 
-        parts = [p.strip() for p in stripped.split('|')[1:-1]]
-        if len(parts) < 4:
+        # 先把转义竖线换成哨兵，切分后再还原
+        protected = stripped.replace('\\|', '\x00')
+        parts = [p.strip().replace('\x00', '|') for p in protected.split('|')[1:-1]]
+        if not parts:
             continue
 
-        if (parts[0] in ['对象ID', '对象 ID', 'ID', '---']
-                or parts[0].startswith(':-') or parts[0].startswith('---')):
+        head = parts[0]
+        if (head in ('对象ID', '对象 ID', 'ID')
+                or head.startswith(':-') or head.startswith('---')):
+            continue
+
+        if len(parts) not in (4, 7):
+            if strict:
+                raise StateMergeError(
+                    f"{file_path}:{lineno} 状态表格行应为 4 列或 7 列，实际 {len(parts)} 列。\n"
+                    f"  行内容: {stripped}\n"
+                    f"  若某列的值里本身含竖线，请写成 \\| "
+                )
             continue
 
         obj_id, field, ftype, val = parts[0], parts[1], parts[2], parts[3]
+
+        if strict and ftype not in VALID_MERGE_TYPES:
+            raise StateMergeError(
+                f"{file_path}:{lineno} 未知的类型列「{ftype}」。\n"
+                f"  合法值: {sorted(VALID_MERGE_TYPES)}\n"
+                f"  常见原因: 用了全角破折号「—」而非半角「-」"
+            )
 
         meta = {}
         for idx, col_name in enumerate(CHANGELOG_META_COLUMNS):
@@ -133,12 +154,11 @@ def parse_md_table(file_path):
                 meta[col_name] = parts[src_idx]
 
         records.append({
-            'object_id': obj_id,
-            'field': field,
-            'type': ftype,
-            'value': val,
-            'meta': meta,
+            'object_id': obj_id, 'field': field,
+            'type': ftype, 'value': val, 'meta': meta,
         })
+
+    return records
 
     return records
 
@@ -228,7 +248,7 @@ def merge_states(base_records, changelog_records, *, descriptive_resolution=None
     descriptive_resolution: 可选 dict {(object_id, field): merged_text}。
       「描述」类履历行的取值：
         - (obj,field) 在 descriptive_resolution 中 -> 用合并文本；
-        - 否则 -> 字面整体覆盖（首次出现 / 已冻结的 描述合并 行 / 调用方选择不智能合并）。
+        - 否则 -> 字面整体覆盖（首次出现 / 调用方选择不智能合并）。
     运算-数值 / 运算-枚举 / 运算-列表 的逻辑与历史版本完全一致。
 
     返回: (merged_records, diff_logs)
@@ -292,8 +312,11 @@ def merge_states(base_records, changelog_records, *, descriptive_resolution=None
                     if item in current_items:
                         current_items.remove(item)
                 else:
-                    if op not in current_items:
-                        current_items.append(op)
+                    raise StateMergeError(
+                        f"[{obj_id}].{field} 运算-列表 的每个元素必须带 +/- 前缀，"
+                        f"收到 '{op}'（完整值: '{change_val}'）。\n"
+                        f"  不支持整表替换写法：要移除请逐项写 -X。"
+                    )
             new_val = format_list(current_items)
 
         elif ftype == '描述':
@@ -303,7 +326,10 @@ def merge_states(base_records, changelog_records, *, descriptive_resolution=None
                 new_val = change_val.strip()
 
         else:
-            new_val = change_val.strip()
+            raise StateMergeError(
+                f"[{obj_id}].{field} 未知类型「{ftype}」。"
+                f"合法: 运算-数值 / 运算-枚举 / 运算-列表 / 描述"
+            )
 
         state_map[key] = {'type': ftype, 'value': new_val}
         diff_logs.append(
@@ -322,92 +348,85 @@ def merge_states(base_records, changelog_records, *, descriptive_resolution=None
     return merged_records, diff_logs
 
 
-def pending_descriptive(base_records, changelog_records):
+def split_descriptive(base_records, changelog_records, cache):
     """
-    找出本章履历里「需要 LLM 智能合并」的描述字段变更。
-    返回 [(object_id, field, old_text, new_text), ...]。
+    把本章履历的描述类变更分成「缓存命中」与「待合并」两拨。
+    返回 (resolved, pending)：
+      resolved  {(obj, field): merged_text}   —— 可直接用，不调 LLM
+      pending   [(obj, field, old, new), ...] —— 需要 LLM
 
-    跳过：类型非「描述」；元数据 变更类型 == 描述合并（已冻结）；
-          旧值为空/不存在（首次出现，字面写入即可）；新旧文本相同。
+    跳过条件：类型非「描述」；旧值为空/不存在（首次出现，字面写入即可）；新旧文本相同。
     """
     cur = {(r['object_id'], r['field']): r['value'] for r in base_records}
-    out = []
+    resolved, pending = {}, []
     for rec in changelog_records:
         if rec['type'] != '描述':
-            continue
-        if rec.get('meta', {}).get('变更类型') == DESCRIPTIVE_MERGED_MARK:
             continue
         key = (rec['object_id'], rec['field'])
         old_val = cur.get(key)
         if old_val is None or old_val.strip() in NUMERIC_EMPTY_VALUES:
             continue
         new_val = rec['value'].strip()
-        if new_val == old_val.strip():
+        old_val = old_val.strip()
+        if new_val == old_val:
             continue
-        out.append((rec['object_id'], rec['field'], old_val, new_val))
-    return out
+        ck = (rec['object_id'], rec['field'],
+              value_fingerprint(old_val), value_fingerprint(new_val))
+        if ck in cache:
+            resolved[key] = cache[ck]
+        else:
+            pending.append((rec['object_id'], rec['field'], old_val, new_val))
+    return resolved, pending
 
 
-def rewrite_changelog_text(original_text, resolution):
+def fold_all(baseline_dir, changelog_paths, *, cache=None, resolver=None, chapter_names=None):
     """
-    把 04_本章状态履历.md 文本里已被 LLM 合并的描述行：
-      - 「值」列换成合并文本；
-      - 「变更类型」元数据列改成 描述合并。
-    其余行、表头、注释块原样保留。返回新文本（不落盘）。
-    resolution: dict {(object_id, field): merged_text}
-    """
-    out_lines = []
-    for line in original_text.splitlines():
-        stripped = line.strip()
-        if stripped.startswith('|'):
-            parts = [p.strip() for p in stripped.split('|')[1:-1]]
-            if len(parts) >= 4 and (parts[0], parts[1]) in resolution:
-                merged = resolution[(parts[0], parts[1])]
-                cols = parts[:]
-                cols[3] = merged
-                # 补齐到 7 列
-                while len(cols) < 7:
-                    cols.append('-')
-                cols[6] = DESCRIPTIVE_MERGED_MARK
-                out_lines.append("| " + " | ".join(cols) + " |")
-                continue
-        out_lines.append(line)
-    text = "\n".join(out_lines)
-    if original_text.endswith("\n") and not text.endswith("\n"):
-        text += "\n"
-    return text
+    从冻结基线出发，按给定顺序折叠各章履历。
 
+    cache:        load_merge_cache() 的结果；None 视为空
+    resolver:     callable(pending) -> {(obj, field): merged_text}
+                  None 且存在未命中 -> 抛 StateMergeError
+    chapter_names: 与 changelog_paths 等长的章名列表，仅用于写进缓存条目做溯源
 
-def fold_all(baseline_dir, changelog_paths, resolver=None):
-    """
-    从冻结基线出发，按给定顺序折叠 changelog_paths 里的每个 04_本章状态履历.md。
-
-    resolver: 可选 callable(pending_list) -> {(obj,field): merged_text}
-      pending_list 为 pending_descriptive() 的返回。仅当某章存在待合并描述变更时调用。
-      resolver 为 None 且存在待合并描述变更 -> 抛 StateMergeError。
-
-    返回 (records, writebacks)：
-      records    折叠终态（list[record]）
-      writebacks dict {changelog_path(str): 新文本}  —— 调用方负责原子写回冻结
+    返回 (records, new_cache_entries)。调用方负责 append_merge_cache。
+    本函数永不修改任何履历文件。
     """
     records = load_state_tree(baseline_dir)
-    writebacks = {}
-    for cl_path in changelog_paths:
-        cl_path = str(cl_path)
-        cl = parse_md_table(cl_path)
-        pend = pending_descriptive(records, cl)
-        resolution = None
-        if pend:
+    cache = cache or {}
+    new_entries = []
+    today = datetime.now(timezone.utc).date().isoformat()
+
+    for i, cl_path in enumerate(changelog_paths):
+        cl = parse_md_table(str(cl_path))
+        resolved, pending = split_descriptive(records, cl, cache)
+
+        if pending:
             if resolver is None:
+                names = ", ".join(f"{o}.{f}" for o, f, _, _ in pending)
                 raise StateMergeError(
-                    f"{cl_path} 有 {len(pend)} 处未冻结的描述字段变更，需要 LLM 合并。"
-                    f"请对该章运行 merge_chapter_state.py，或用 rebuild_global_state.py --merge-pending。"
+                    f"{cl_path} 有 {len(pending)} 处描述字段变更未命中合并缓存: {names}\n"
+                    f"  原因：首次合并，或上游章节被改动导致前提变化。\n"
+                    f"  处理：对该章跑 merge_chapter_state.py，"
+                    f"或 rebuild_global_state.py --merge-pending。"
                 )
-            resolution = resolver(pend)
-            with open(cl_path, 'r', encoding='utf-8') as f:
-                writebacks[cl_path] = rewrite_changelog_text(f.read(), resolution)
-        records, _diff = merge_states(records, cl, descriptive_resolution=resolution)
-    return records, writebacks
+            merged = resolver(pending)
+            for (obj, field, old, new) in pending:
+                text = merged[(obj, field)]
+                resolved[(obj, field)] = text
+                entry = {
+                    "对象": obj, "字段": field,
+                    "旧值sha": value_fingerprint(old),
+                    "新值sha": value_fingerprint(new),
+                    "合并文本": text,
+                    "章": chapter_names[i] if chapter_names else "",
+                    "时间": today,
+                }
+                new_entries.append(entry)
+                cache[(obj, field, entry["旧值sha"], entry["新值sha"])] = text
+
+        records, _diff = merge_states(records, cl, descriptive_resolution=resolved)
+
+    return records, new_entries
 
 
 # ---------------------------------------------------------------------------
@@ -436,7 +455,7 @@ def sanitize_name(name):
 
 
 def object_id_to_relpath(object_id):
-    """`角色.叶云生` -> `01_角色/01_角色_叶云生.md`（不含碰撞后缀）。"""
+    """`角色.示例角色` -> `01_角色/01_角色_示例角色.md`（不含碰撞后缀）。"""
     cat = category_for_object(object_id)
     name = object_id.split(".", 1)[1] if "." in object_id else object_id
     return f"{cat}/{cat}_{sanitize_name(name)}.md"
@@ -447,15 +466,15 @@ def object_id_to_relpath(object_id):
 # ---------------------------------------------------------------------------
 
 def find_novel_dir(hint_path):
-    """从给定路径向上查找含 04_全局状态/ 或 02_数据库/ 的小说根目录。找不到返回 None。"""
+    """从给定路径向上查找含 02_数据库/ 和 05_工作区/ 的小说根目录。找不到返回 None。"""
     if not hint_path:
         return None
     cur = os.path.abspath(hint_path)
     if not os.path.isdir(cur):
         cur = os.path.dirname(cur)
     while True:
-        if (os.path.isdir(os.path.join(cur, GLOBAL_STATE_DIRNAME))
-                or os.path.isdir(os.path.join(cur, "02_数据库"))):
+        if (os.path.isdir(os.path.join(cur, "02_数据库"))
+                and os.path.isdir(os.path.join(cur, WORKSPACE_DIRNAME))):
             return cur
         parent = os.path.dirname(cur)
         if parent == cur:
@@ -463,16 +482,73 @@ def find_novel_dir(hint_path):
         cur = parent
 
 
-def global_state_dir(novel_dir):
-    return os.path.join(novel_dir, GLOBAL_STATE_DIRNAME)
+def latest_state_dir(novel_dir):
+    return os.path.join(novel_dir, LATEST_STATE_SUBPATH)
+
+
+def merge_cache_path(novel_dir):
+    return os.path.join(novel_dir, WORKSPACE_DIRNAME, "00_全局", MERGE_CACHE_FILENAME)
+
+
+def value_fingerprint(text):
+    """描述文本的内容指纹。取 sha256 前 16 位，足够避免碰撞且便于人眼比对。"""
+    return hashlib.sha256((text or "").strip().encode("utf-8")).hexdigest()[:16]
+
+
+def load_merge_cache(novel_dir):
+    """返回 {(对象, 字段, 旧值sha, 新值sha): 合并文本}。文件不存在返回 {}。"""
+    path = merge_cache_path(novel_dir)
+    cache = {}
+    if not os.path.exists(path):
+        return cache
+    with open(path, encoding="utf-8") as f:
+        for lineno, line in enumerate(f, 1):
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            try:
+                e = json.loads(line)
+                cache[(e["对象"], e["字段"], e["旧值sha"], e["新值sha"])] = e["合并文本"]
+            except (json.JSONDecodeError, KeyError) as ex:
+                raise StateMergeError(f"{path}:{lineno} 描述合并缓存行损坏: {ex}")
+    return cache
+
+
+def append_merge_cache(novel_dir, entries):
+    """追加写。缓存是派生物，只追加不重写、不删除。"""
+    if not entries:
+        return
+    path = merge_cache_path(novel_dir)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "a", encoding="utf-8") as f:
+        for e in entries:
+            f.write(json.dumps(e, ensure_ascii=False) + "\n")
 
 
 def baseline_dir(novel_dir):
     return os.path.join(novel_dir, BASELINE_SUBPATH)
 
 
+CHAPTER_REL_RE = re.compile(r"^(\d+)_第(\d+)部/(\d+)_卷(\d+)/章(\d+)$")
+
+
+def chapter_sort_key(changelog_path, novel_dir):
+    """从履历路径解析 (部号, 卷号, 章号)。不符合规范即抛错，绝不静默排序。"""
+    chap_dir = os.path.dirname(os.path.abspath(changelog_path))
+    ws = os.path.join(os.path.abspath(novel_dir), WORKSPACE_DIRNAME)
+    rel = os.path.relpath(chap_dir, ws).replace(os.sep, "/")
+    m = CHAPTER_REL_RE.match(rel)
+    if not m:
+        raise StateMergeError(
+            f"章目录路径不符合规范: {WORKSPACE_DIRNAME}/{rel}\n"
+            f"应为 NN_第NN部/NN_卷NN/章NNNN（例: 01_第01部/01_卷01/章0001）"
+        )
+    _pp, part, _vp, vol, chap = m.groups()
+    return (int(part), int(vol), int(chap))
+
+
 def iter_workspace_changelogs(novel_dir):
-    """返回 05_工作区/ 下所有 04_本章状态履历.md 的绝对路径，按完整路径排序。"""
+    """返回 05_工作区/ 下所有 04_本章状态履历.md 的绝对路径，按 (部, 卷, 章) 排序。"""
     ws = os.path.join(novel_dir, WORKSPACE_DIRNAME)
     found = []
     if not os.path.isdir(ws):
@@ -480,13 +556,13 @@ def iter_workspace_changelogs(novel_dir):
     for dirpath, _dirs, files in os.walk(ws):
         if CHANGELOG_FILENAME in files:
             found.append(os.path.normpath(os.path.join(dirpath, CHANGELOG_FILENAME)))
-    found.sort()
+    found.sort(key=lambda p: chapter_sort_key(p, novel_dir))
     return found
 
 
 def chapter_rel_name(changelog_path, novel_dir):
-    """把 .../05_工作区/01_第01部/01_卷01/01_章0001/04_本章状态履历.md
-    表示成 `01_第01部/01_卷01/01_章0001`（供 manifest 与报告用）。"""
+    """把 .../05_工作区/01_第01部/01_卷01/章0001/04_本章状态履历.md
+    表示成 `01_第01部/01_卷01/章0001`（供 manifest 与报告用）。"""
     chap_dir = os.path.dirname(os.path.abspath(changelog_path))
     ws = os.path.join(os.path.abspath(novel_dir), WORKSPACE_DIRNAME)
     try:
@@ -552,7 +628,7 @@ def render_category_index(category, obj_paths, obj_counts, folded_chapter):
 def render_manifest(folded_chapter, tool, n_objects, n_records):
     now = datetime.now(timezone.utc).isoformat()
     return "\n".join([
-        "# 04_全局状态 · 同步状态",
+        "# 05_工作区/00_全局/01_最新状态 · 同步状态",
         "",
         "> 由状态脚本自动写入，供人工查看与审计参考，非权威数据。",
         "",
@@ -580,7 +656,7 @@ def parse_manifest_folded_chapter(state_dir):
 def write_state_tree(state_dir, records, *, folded_chapter=None, tool="state_tree.py",
                      prune=True, manifest=True, note=OBJECT_NOTE):
     """
-    把 records 写成 04_全局状态/ 的对象树：逐对象文件原子写、重建类目索引、
+    把 records 写成 05_工作区/00_全局/01_最新状态/ 的对象树：逐对象文件原子写、重建类目索引、
     可选写 manifest、可选 prune 掉不再存在的对象文件与空类目目录。
     返回日志行列表。
     """
@@ -637,8 +713,13 @@ def write_state_tree(state_dir, records, *, folded_chapter=None, tool="state_tre
             ]
             if not leftover_objs:
                 for fn in os.listdir(cat_dir):
+                    if fn.startswith("00_"):
+                        continue  # 永不触碰 00_* 说明文件
                     os.remove(os.path.join(cat_dir, fn))
-                os.rmdir(cat_dir)
+                # 只有目录完全空了才 rmdir
+                remaining = os.listdir(cat_dir)
+                if not remaining:
+                    os.rmdir(cat_dir)
                 logs.append(f"prune 空类目目录 {cat}/")
 
     if manifest:

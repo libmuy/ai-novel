@@ -28,7 +28,7 @@ SKELETON = os.path.join(REPO_ROOT, "00_通用模板", "05_项目骨架模板")
 AGENTS_TEMPLATE = os.path.join(REPO_ROOT, "00_通用模板", "00_小说级AGENTS模板.md")
 DATA_DIR = os.path.join(REPO_ROOT, "01_小说数据")
 
-TOP_DIRS = ["01_设定", "02_数据库", "03_规划", "04_全局状态", "05_工作区", "10_正文"]
+TOP_DIRS = ["01_设定", "02_数据库", "03_规划", "05_工作区", "10_正文"]
 
 
 def next_nn():
@@ -127,8 +127,8 @@ def main():
     for d in TOP_DIRS:
         checks.append((f"顶层目录 {d}", os.path.isdir(os.path.join(dest, d))))
     checks.append(("AGENTS.md 无残留 {{", "{{" not in open(agents_path, encoding="utf-8").read()))
-    checks.append(("04_全局状态/00_说明.md", os.path.isfile(os.path.join(dest, "04_全局状态", "00_说明.md"))))
-    checks.append(("04_全局状态/00_同步状态.md", os.path.isfile(os.path.join(dest, "04_全局状态", "00_同步状态.md"))))
+    checks.append(("05_工作区/00_全局/01_最新状态/00_说明.md", os.path.isfile(os.path.join(dest, "05_工作区/00_全局/01_最新状态", "00_说明.md"))))
+    checks.append(("05_工作区/00_全局/01_最新状态/00_同步状态.md", os.path.isfile(os.path.join(dest, "05_工作区/00_全局/01_最新状态", "00_同步状态.md"))))
     checks.append(("00_基线状态/00_说明.md", os.path.isfile(os.path.join(dest, "05_工作区", "00_全局", "00_基线状态", "00_说明.md"))))
     checks.append(("无逐章 03_本章初始状态.md", not any(
         "03_本章初始状态.md" in fs for _r, _d, fs in os.walk(dest))))

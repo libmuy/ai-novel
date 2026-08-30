@@ -9,7 +9,7 @@ ai-novel 仓库一致性审查脚本（Agent 可读版）v2.1
 加 --format text 可输出人类可读的中文提示。
 
 升级内容：
-- 校验 04_本章状态履历.md 字段合法性与履历语法、04_全局状态/ 每对象文件树、状态漂移（state_drift）；
+- 校验 04_本章状态履历.md 字段合法性与履历语法、05_工作区/00_全局/01_最新状态/ 每对象文件树、状态漂移（state_drift）；
 - TODO_PATTERN 扩展至匹配 @(地名|势力|人物|类型|书籍|伏笔)
 - CATEGORY_KEYWORD_IN_PROGRESS 扩展至覆盖全部任务类别
 - check_todo_registry：校验所有TODO引用是否在全局注册表中有对应条目
@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from collections import defaultdict
 
-STANDARD_TOP_DIRS = ["01_设定", "02_数据库", "03_规划", "04_全局状态", "05_工作区", "10_正文"]
+STANDARD_TOP_DIRS = ["01_设定", "02_数据库", "03_规划", "05_工作区", "10_正文"]
 
 # 合并脚本认可的 4 种字段细分类型
 VALID_MERGE_TYPES = {"运算-数值", "运算-枚举", "运算-列表", "描述"}
@@ -401,8 +401,8 @@ def check_geographic_hierarchy(novel_dir: Path, issues: list):
 
 
 def check_id_format(novel_dir: Path, issues: list):
-    """校验ID格式与卡片类型的严格对应"""
-    defined_ids = defaultdict(list)
+    """校验ID格式与卡片类型的严格对应。同文件内多次出现只计一次。"""
+    defined_ids = defaultdict(set)
     id_pattern = re.compile(r"\b(WR-\d+|DY-\d+|RES-[A-Z]+-\d+|V\d+-C\d+-\d+|BP-V\d+-\d+|BT-V\d+-\d+)\b")
     ref_pattern = re.compile(r"@\w+\.\[")
 
@@ -416,13 +416,12 @@ def check_id_format(novel_dir: Path, issues: list):
             if ref_pattern.search(line):
                 continue
             for m in id_pattern.finditer(line):
-                defined_ids[m.group(1)].append(f"{rel}:{i+1}")
+                defined_ids[m.group(1)].add(rel)
 
     duplicates = {}
     for k, v in defined_ids.items():
-        unique_files = set(loc.split(":")[0] for loc in v)
-        if len(unique_files) > 2:
-            duplicates[k] = v
+        if len(v) > 2:
+            duplicates[k] = sorted(v)
     if duplicates:
         locs = [f"{k}: {', '.join(v[:3])}" for k, v in sorted(duplicates.items())]
         issues.append({
@@ -443,7 +442,7 @@ STATE_OBJECT_PREFIX_CATEGORY = {
 
 
 def _check_state_tree(novel_dir: Path, state_dir: Path, label: str, vocab: dict, issues: list):
-    """校验 04_全局状态/ 或 00_基线状态/ 的每对象文件（不可解析 / 头对象ID不符 / 字段非法 /
+    """校验 05_工作区/00_全局/01_最新状态/ 或 00_基线状态/ 的每对象文件（不可解析 / 头对象ID不符 / 字段非法 /
     类型与词表不符 / 归档目录错位 / 未知前缀 / 索引失步）。"""
     if not state_dir.exists():
         return
@@ -496,7 +495,7 @@ def _check_state_tree(novel_dir: Path, state_dir: Path, label: str, vocab: dict,
 
     def _add(key, sev, items, detail, action):
         if items:
-            issues.append({"check": key, "severity": sev, "category": "04_全局状态",
+            issues.append({"check": key, "severity": sev, "category": "01_最新状态",
                            "detail": f"[{label}] " + detail.format(n=len(items)),
                            "locations": items, "suggested_action": action})
 
@@ -517,11 +516,11 @@ def _check_state_tree(novel_dir: Path, state_dir: Path, label: str, vocab: dict,
 
 
 def check_workspace_chapter_states(novel_dir: Path, issues: list):
-    """校验 05_工作区/ 中 04_本章状态履历.md 字段合法性与履历语法，并校验 04_全局状态/ 与基线树。"""
+    """校验 05_工作区/ 中 04_本章状态履历.md 字段合法性与履历语法，并校验 05_工作区/00_全局/01_最新状态/ 与基线树。"""
     workspace_dir = novel_dir / "05_工作区"
     vocab = load_field_vocab(novel_dir)
 
-    _check_state_tree(novel_dir, novel_dir / "04_全局状态", "全局状态", vocab, issues)
+    _check_state_tree(novel_dir, novel_dir / "05_工作区" / "00_全局" / "01_最新状态", "全局状态", vocab, issues)
     _check_state_tree(novel_dir, novel_dir / "05_工作区" / "00_全局" / "00_基线状态",
                       "基线", vocab, issues)
 
@@ -554,8 +553,13 @@ def check_workspace_chapter_states(novel_dir: Path, issues: list):
                     if not (val.startswith("+") or val.startswith("-") or val.isdigit()):
                         invalid_syntax.append(f"{rel}:{i+1} (数值履历缺乏 +/- 前缀: '{val}')")
                 elif ftype == "运算-列表":
-                    if not (val.startswith("+") or val.startswith("-") or "," in val or val in ["无", "空"]):
+                    if not (val.startswith("+") or val.startswith("-") or val in ["无", "空"]):
                         invalid_syntax.append(f"{rel}:{i+1} (列表履历格式非 +X,-Y: '{val}')")
+                    elif "," in val:
+                        items = [x.strip() for x in val.split(",") if x.strip()]
+                        for item in items:
+                            if not item.startswith("+") and not item.startswith("-"):
+                                invalid_syntax.append(f"{rel}:{i+1} (列表元素缺少 +/- 前缀: '{item}')")
 
     if invalid_fields:
         issues.append({
@@ -588,6 +592,39 @@ def check_workspace_chapter_states(novel_dir: Path, issues: list):
             ),
             "locations": type_mismatches,
             "suggested_action": "以 00_通用模板/03_字段词表.md 为准修正表内「类型」列；若词表登记本身有误，先订正词表。",
+        })
+
+
+def check_changelog_parseable(novel_dir: Path, issues: list):
+    """用 strict=True 调 parse_md_table 扫全部履历与状态文件，捕获 StateMergeError。"""
+    stmod = _load_state_helpers()
+    if not stmod:
+        return
+    unparseable = []
+    for f in (novel_dir / "05_工作区").rglob("04_本章状态履历.md") if (novel_dir / "05_工作区").exists() else []:
+        try:
+            stmod.parse_md_table(str(f), strict=True)
+        except stmod.StateMergeError as e:
+            unparseable.append(f"{f.relative_to(novel_dir).as_posix()}: {e}")
+    # 也扫基线和最新状态
+    for state_dir in [novel_dir / "05_工作区" / "00_全局" / "00_基线状态",
+                      novel_dir / "05_工作区" / "00_全局" / "01_最新状态"]:
+        if not state_dir.exists():
+            continue
+        for f in state_dir.rglob("*.md"):
+            if f.name.startswith("00_") or f.name.endswith(".md"):
+                try:
+                    stmod.parse_md_table(str(f), strict=True)
+                except stmod.StateMergeError as e:
+                    unparseable.append(f"{f.relative_to(novel_dir).as_posix()}: {e}")
+    if unparseable:
+        issues.append({
+            "check": "changelog_unparseable",
+            "severity": "error",
+            "category": "05_工作区",
+            "detail": f"发现 {len(unparseable)} 个状态文件存在无法解析的行（列数不符或类型非法）",
+            "locations": unparseable,
+            "suggested_action": "修正对应文件中的非法行：检查列数是否为 4 或 7，类型列是否为合法值",
         })
 
 
@@ -711,7 +748,7 @@ def check_cascade_terminal_conflicts(novel_dir: Path, issues: list):
 def _folded_changelog_paths(stmod, novel_dir: Path):
     """按 00_同步状态.md 的「折叠至章」截断工作区履历清单。返回 (paths, folded_name)。"""
     all_paths = stmod.iter_workspace_changelogs(str(novel_dir))
-    folded = stmod.parse_manifest_folded_chapter(str(novel_dir / "04_全局状态"))
+    folded = stmod.parse_manifest_folded_chapter(str(novel_dir / "05_工作区/00_全局/01_最新状态"))
     if folded is None:
         return [], None
     names = [stmod.chapter_rel_name(p, str(novel_dir)) for p in all_paths]
@@ -723,17 +760,17 @@ def _folded_changelog_paths(stmod, novel_dir: Path):
 def check_state_drift(novel_dir: Path, issues: list):
     """
     状态漂移检查（替代 chain_drift）：
-    从冻结基线折叠「已并入」的履历，比对 04_全局状态/ 存盘树。
+    从冻结基线折叠「已并入」的履历，比对 01_最新状态/ 存盘树。
     不一致 -> state_drift：对象文件被绕过脚本手改，或上游 04 改动后未跑 rebuild_global_state.py。
     """
     stmod = _load_state_helpers()
     if not stmod:
         return
     baseline = novel_dir / "05_工作区" / "00_全局" / "00_基线状态"
-    live = novel_dir / "04_全局状态"
+    live = novel_dir / "05_工作区" / "00_全局" / "01_最新状态"
     if not baseline.exists():
         issues.append({
-            "check": "state_baseline_missing", "severity": "warning", "category": "04_全局状态",
+            "check": "state_baseline_missing", "severity": "warning", "category": "01_最新状态",
             "detail": "冻结基线 05_工作区/00_全局/00_基线状态/ 不存在，无法校验全局状态一致性",
             "locations": [], "suggested_action": "新书用技能 08_基线状态初始化 生成基线；旧书用 migrate_state_layout.py 迁移",
         })
@@ -746,7 +783,7 @@ def check_state_drift(novel_dir: Path, issues: list):
         expected, _wb = stmod.fold_all(str(baseline), paths, resolver=None)
     except stmod.StateMergeError as e:
         issues.append({
-            "check": "state_drift", "severity": "error", "category": "04_全局状态",
+            "check": "state_drift", "severity": "error", "category": "01_最新状态",
             "detail": f"从基线折叠已并入的履历时失败: {e}",
             "locations": [], "suggested_action": "已标记「折叠至章」却有未冻结的描述行，属异常；对涉及章重跑 merge_chapter_state.py",
         })
@@ -755,8 +792,8 @@ def check_state_drift(novel_dir: Path, issues: list):
     diff = stmod.records_diff(stmod.load_state_tree(str(live)), expected)
     if diff:
         issues.append({
-            "check": "state_drift", "severity": "warning", "category": "04_全局状态",
-            "detail": (f"04_全局状态/ 与「基线 ⊕ 已并入履历（折叠至 {folded}）」的折叠结果不一致，共 {len(diff)} 处："
+            "check": "state_drift", "severity": "warning", "category": "01_最新状态",
+            "detail": (f"01_最新状态/ 与「基线 ⊕ 已并入履历（折叠至 {folded}）」的折叠结果不一致，共 {len(diff)} 处："
                        "对象文件可能被绕过脚本手改，或上游某章 04 改动后未跑 rebuild_global_state.py"),
             "locations": diff,
             "suggested_action": "运行 python3 02_工具/rebuild_global_state.py <小说目录>（先 --dry-run 复核）",
@@ -764,14 +801,14 @@ def check_state_drift(novel_dir: Path, issues: list):
 
 
 def check_state_unmerged_chapters(novel_dir: Path, issues: list):
-    """列出尚未并入 04_全局状态/ 的章（晚于「折叠至章」），或含未冻结描述行的章。"""
+    """列出尚未并入 01_最新状态/ 的章（晚于「折叠至章」），或含未冻结描述行的章。"""
     stmod = _load_state_helpers()
     if not stmod:
         return
     all_paths = stmod.iter_workspace_changelogs(str(novel_dir))
     if not all_paths:
         return
-    folded = stmod.parse_manifest_folded_chapter(str(novel_dir / "04_全局状态"))
+    folded = stmod.parse_manifest_folded_chapter(str(novel_dir / "05_工作区" / "00_全局" / "01_最新状态"))
     names = [stmod.chapter_rel_name(p, str(novel_dir)) for p in all_paths]
     if folded is None:
         unmerged = names
@@ -781,15 +818,15 @@ def check_state_unmerged_chapters(novel_dir: Path, issues: list):
         unmerged = names
     if unmerged:
         issues.append({
-            "check": "state_unmerged_chapters", "severity": "info", "category": "04_全局状态",
-            "detail": f"{len(unmerged)} 章的履历尚未并入 04_全局状态/",
+            "check": "state_unmerged_chapters", "severity": "info", "category": "01_最新状态",
+            "detail": f"{len(unmerged)} 章的履历尚未并入 01_最新状态/",
             "locations": unmerged,
             "suggested_action": "对每章按顺序运行 python3 02_工具/merge_chapter_state.py --chapter-dir <章目录>",
         })
 
 
 def check_no_legacy_state_files(novel_dir: Path, issues: list):
-    """检测旧模型残留：逐章 03_本章初始状态.md、04_全局状态/ 下的扁平 0N_*状态.md。"""
+    """检测旧模型残留：逐章 03_本章初始状态.md、01_最新状态/ 下的扁平 0N_*状态.md。"""
     ws = novel_dir / "05_工作区"
     legacy_03 = [p.relative_to(novel_dir).as_posix() for p in ws.rglob("03_本章初始状态.md")] if ws.exists() else []
     if legacy_03:
@@ -797,16 +834,41 @@ def check_no_legacy_state_files(novel_dir: Path, issues: list):
             "check": "legacy_chapter_state_present", "severity": "error", "category": "05_工作区",
             "detail": f"发现 {len(legacy_03)} 个已废弃的逐章 03_本章初始状态.md（新模型无逐章初始状态）",
             "locations": legacy_03,
-            "suggested_action": "删除这些文件；状态起点统一读 04_全局状态/，改旧章用 build_state_snapshot.py --at-chapter",
+            "suggested_action": "删除这些文件；状态起点统一读 01_最新状态/，改旧章用 build_state_snapshot.py --at-chapter",
         })
-    gdir = novel_dir / "04_全局状态"
+    gdir = novel_dir / "05_工作区" / "00_全局" / "01_最新状态"
     flat = sorted(p.name for p in gdir.glob("0[1-5]_*状态.md")) if gdir.exists() else []
     if flat:
         issues.append({
-            "check": "legacy_global_state_flat", "severity": "error", "category": "04_全局状态",
-            "detail": f"04_全局状态/ 下有 {len(flat)} 个已废弃的扁平分类文件: {flat}",
-            "locations": [f"04_全局状态/{n}" for n in flat],
+            "check": "legacy_global_state_flat", "severity": "error", "category": "01_最新状态",
+            "detail": f"01_最新状态/ 下有 {len(flat)} 个已废弃的扁平分类文件: {flat}",
+            "locations": [f"01_最新状态/{n}" for n in flat],
             "suggested_action": "运行 migrate_state_layout.py 迁移为每对象一文件的目录树",
+        })
+
+
+def check_stale_descriptive_merge(novel_dir: Path, issues: list):
+    """用 resolver=None 折叠全部履历，捕获未命中缓存的描述字段变更即报。"""
+    stmod = _load_state_helpers()
+    if not stmod:
+        return
+    baseline = novel_dir / "05_工作区" / "00_全局" / "00_基线状态"
+    if not baseline.exists():
+        return
+    changelogs = stmod.iter_workspace_changelogs(str(novel_dir))
+    if not changelogs:
+        return
+    cache = stmod.load_merge_cache(str(novel_dir))
+    try:
+        stmod.fold_all(str(baseline), changelogs, cache=cache, resolver=None)
+    except stmod.StateMergeError as e:
+        issues.append({
+            "check": "stale_descriptive_merge",
+            "severity": "error",
+            "category": "01_最新状态",
+            "detail": f"存在未命中合并缓存的描述字段变更: {e}",
+            "locations": [],
+            "suggested_action": "运行 python3 02_工具/rebuild_global_state.py --merge-pending <小说目录>",
         })
 
 
@@ -821,10 +883,12 @@ def run_all_checks(novel_dir: Path) -> dict:
     check_geographic_hierarchy(novel_dir, issues)
     check_id_format(novel_dir, issues)
     check_workspace_chapter_states(novel_dir, issues)
+    check_changelog_parseable(novel_dir, issues)
     check_no_legacy_state_files(novel_dir, issues)
     check_state_drift(novel_dir, issues)
     check_state_unmerged_chapters(novel_dir, issues)
     check_cascade_terminal_conflicts(novel_dir, issues)
+    check_stale_descriptive_merge(novel_dir, issues)
     return {
         "novel_dir": str(novel_dir),
         "generated_at": datetime.now(timezone.utc).isoformat(),

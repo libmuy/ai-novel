@@ -5,20 +5,20 @@
 全局状态重折工具 (rebuild_global_state.py)
 
 用于「改早期章节」的场景：某一章的 `04_本章状态履历.md` 被人工改动后，
-`04_全局状态/` 需要重新计算。
+`01_最新状态/` 需要重新计算。
 
 做法：从冻结基线 `05_工作区/00_全局/00_基线状态/` 出发，按章节路径顺序
-折叠**全部** `04_本章状态履历.md`，覆盖写入 `04_全局状态/`。
+折叠**全部** `04_本章状态履历.md`，覆盖写入 `01_最新状态/`。
 不需要「起始章」参数——基线不可变，全量重折即可。
 
 用法
 ----
     python3 02_工具/rebuild_global_state.py <小说目录> [--dry-run] [--merge-pending] [--backup]
 
-      --dry-run         打印将对 04_全局状态/ 造成的 diff 与计划冻结回写的履历，不写文件
-      --merge-pending   对存在未冻结描述变更的章，各调一次 LLM 合并并冻结回写
+      --dry-run         打印将对 01_最新状态/ 造成的 diff 与计划追加的缓存条目，不写文件
+      --merge-pending   对存在未合并描述变更的章，各调一次 LLM 合并并追加缓存
                         （缺省则遇到这类章直接中止、退出码 2）
-      --backup          写前把 04_全局状态/ 整目录备份为 .bak
+      --backup          写前把 01_最新状态/ 整目录备份为 .bak
 
 必须先 `--dry-run` 复核。
 """
@@ -36,17 +36,17 @@ from merge_chapter_state import _make_llm_resolver  # noqa: E402
 
 
 def main():
-    ap = argparse.ArgumentParser(description="从基线全量重折 04_全局状态/")
+    ap = argparse.ArgumentParser(description="从基线全量重折 01_最新状态/")
     ap.add_argument("novel_dir", help="小说根目录")
     ap.add_argument("--dry-run", action="store_true", help="打印 diff 与计划，不写文件")
     ap.add_argument("--merge-pending", action="store_true",
-                    help="对有未冻结描述变更的章各调一次 LLM 合并并冻结回写")
-    ap.add_argument("--backup", action="store_true", help="写前把 04_全局状态/ 整目录备份为 .bak")
+                    help="对有未合并描述变更的章各调一次 LLM 合并并追加缓存")
+    ap.add_argument("--backup", action="store_true", help="写前把 01_最新状态/ 整目录备份为 .bak")
     args = ap.parse_args()
 
     novel_dir = os.path.abspath(args.novel_dir)
     baseline = st.baseline_dir(novel_dir)
-    live = st.global_state_dir(novel_dir)
+    live = st.latest_state_dir(novel_dir)
     tools_dir = os.path.dirname(os.path.abspath(__file__))
 
     if not os.path.isdir(baseline):
@@ -62,9 +62,12 @@ def main():
         print(f"  - {st.chapter_rel_name(p, novel_dir)}")
 
     resolver = _make_llm_resolver(tools_dir) if args.merge_pending else None
+    cache = st.load_merge_cache(novel_dir)
+    chapter_names = [st.chapter_rel_name(p, novel_dir) for p in changelogs]
 
     try:
-        records, writebacks = st.fold_all(baseline, changelogs, resolver=resolver)
+        records, new_entries = st.fold_all(baseline, changelogs, cache=cache,
+                                           resolver=resolver, chapter_names=chapter_names)
     except StateMergeError as e:
         print(f"\n[阻断] 重折中止，未写入任何文件：{e}")
         if not args.merge_pending:
@@ -74,16 +77,14 @@ def main():
     diff = records_diff(load_state_tree(live), records)
     print(f"\n折叠终态记录数: {len(records)}")
     if diff:
-        print("\n--- 04_全局状态/ 将变更 ---")
+        print("\n--- 01_最新状态/ 将变更 ---")
         for line in diff:
             print(line)
     else:
-        print("\n04_全局状态/ 无变化。")
+        print("\n01_最新状态/ 无变化。")
 
-    if writebacks:
-        print("\n--- 将冻结回写以下履历（描述字段已由 LLM 合并）---")
-        for p in writebacks:
-            print(f"  {st.chapter_rel_name(p, novel_dir)}/{CHANGELOG_FILENAME}")
+    if new_entries:
+        print(f"\n--- 描述字段合并缓存将追加 {len(new_entries)} 条 ---")
 
     if args.dry_run:
         print("\n[Dry-run] 未写入任何文件。人工复核 diff 无误后去掉 --dry-run 重跑。")
@@ -96,9 +97,8 @@ def main():
         shutil.copytree(live, bak)
         print(f"已备份 {live} -> {bak}")
 
-    for path, text in writebacks.items():
-        st._atomic_write(path, text)
-        print(f"已冻结回写 {st.chapter_rel_name(path, novel_dir)}/{CHANGELOG_FILENAME}")
+    # 写序：先缓存落盘 → 再写状态树
+    st.append_merge_cache(novel_dir, new_entries)
 
     folded = st.chapter_rel_name(changelogs[-1], novel_dir) if changelogs else None
     for line in st.write_state_tree(live, records, folded_chapter=folded,

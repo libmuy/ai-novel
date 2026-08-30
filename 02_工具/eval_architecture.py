@@ -32,9 +32,9 @@ def analyze_token_efficiency(base_dir):
             "00_通用模板/01_写作规则/00_文风_底层成长流.md",
             "01_小说数据/00_苍玄/01_设定/00_主角档案_当前阶段.md",
             "01_小说数据/00_苍玄/01_设定/00_小说概念.md",
-            "01_小说数据/00_苍玄/03_规划/01_第01部/01_卷01/规划_卷01_章0001.md",
+            "01_小说数据/00_苍玄/03_规划/01_第01部/01_卷01/规划_卷章0001.md",
             "01_小说数据/00_苍玄/02_数据库/07_人物/07_人物_刘三斤.md",
-            "01_小说数据/00_苍玄/04_全局状态/01_角色/01_角色_叶云生.md"
+            "01_小说数据/00_苍玄/05_工作区/00_全局/01_最新状态/01_角色/01_角色_示例角色.md"
         ],
         "生成单卷大纲": [
             "00_通用模板/02_卡片模板/06_卷大纲模板.md",
@@ -123,7 +123,7 @@ def analyze_scalability_10m_words():
     print(f"  [核心索引文件 Token 膨胀压力]")
     print(f"    - 伏笔总索引 (`08_伏笔登记.md`): {foreshadowing:,} 条 | 预估大小: ~{foreshadowing_index_bytes/1024:.1f} KB | 预估 Token: ~{estimate_tokens('a'*foreshadowing_index_bytes):,} Tokens")
     print(f"    - 全书规划总索引 (`03_规划/规划.md`): {planning_chapter_files + volumes} 行 | 预估大小: ~{planning_index_bytes/1024:.1f} KB | 预估 Token: ~{estimate_tokens('a'*planning_index_bytes):,} Tokens")
-    print(f"    - 全局状态 (`04_全局状态/`，每对象一文件): 涉及 {characters} 角色, 单对象文件预估 ~{estimate_tokens('a'*800):,} Tokens（不再有单文件膨胀）")
+    print(f"    - 全局状态 (`05_工作区/00_全局/01_最新状态/`，每对象一文件): 涉及 {characters} 角色, 单对象文件预估 ~{estimate_tokens('a'*800):,} Tokens（不再有单文件膨胀）")
 
 def main():
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

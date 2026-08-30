@@ -5,7 +5,7 @@
 只读状态快照工具 (build_state_snapshot.py)
 
 从冻结基线 `05_工作区/00_全局/00_基线状态/` 折叠履历，产出只读的单张 4 列状态表。
-**只读、永不调 LLM**：折叠范围内若有未冻结的描述字段变更 -> 报错、退出码 2
+**只读、永不调 LLM**：折叠范围内若有未合并的描述字段变更 -> 报错、退出码 2
 （提示先对那些章跑 merge_chapter_state.py）。
 
 两种模式
@@ -33,10 +33,11 @@ def _fold(novel_dir, changelog_paths):
     if not os.path.isdir(baseline):
         print(f"错误: 冻结基线不存在: {baseline}")
         sys.exit(1)
+    cache = st.load_merge_cache(novel_dir)
     try:
-        records, _wb = st.fold_all(baseline, changelog_paths, resolver=None)
+        records, _wb = st.fold_all(baseline, changelog_paths, cache=cache, resolver=None)
     except StateMergeError as e:
-        print(f"\n[阻断] {e}\n先对涉及章运行 merge_chapter_state.py 冻结描述字段后再生成快照。")
+        print(f"\n[阻断] {e}\n先对涉及章运行 merge_chapter_state.py 合并描述字段后再生成快照。")
         sys.exit(2)
     return records
 
