@@ -2,78 +2,94 @@
 # -*- coding: utf-8 -*-
 
 """
-卷末只读状态快照构建工具 (build_state_snapshot.py)
+只读状态快照工具 (build_state_snapshot.py)
 
-在某一卷结束时，顺序重放该卷全部章节的 03_本章初始状态.md 与 04_本章状态履历.md，
-进行结构化重放合并，生成只读的 99_卷末状态快照.md，供审计与 consistency 自检工具查阅。
+从冻结基线 `05_工作区/00_全局/00_基线状态/` 折叠履历，产出只读的单张 4 列状态表。
+**只读、永不调 LLM**：折叠范围内若有未冻结的描述字段变更 -> 报错、退出码 2
+（提示先对那些章跑 merge_chapter_state.py）。
+
+两种模式
+--------
+    # 卷末快照：折叠到该卷最后一章（含），写 99_卷末状态快照.md
+    python3 02_工具/build_state_snapshot.py --volume-dir <卷目录> [--output PATH]
+
+    # 某章开篇状态：折叠到该章之前（不含），默认打印 stdout
+    #   —— 回溯改旧章时，滑动窗口任务需要「第 N 章开篇时的世界状态」
+    python3 02_工具/build_state_snapshot.py --at-chapter <章目录> [--output PATH]
 """
 
-import sys
-import os
-import re
 import argparse
-from merge_chapter_state import parse_md_table, merge_states, render_md_table
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import state_tree as st  # noqa: E402
+from state_tree import render_md_table, StateMergeError, CHANGELOG_FILENAME  # noqa: E402
 
 
-def find_chapter_dirs(volume_dir):
-    """查找卷目录下所有的章级工作区目录 (如 01_章0001)"""
-    if not os.path.exists(volume_dir):
-        return []
-
-    dirs = []
-    for entry in sorted(os.listdir(volume_dir)):
-        full_path = os.path.join(volume_dir, entry)
-        if os.path.isdir(full_path) and ("章" in entry or entry.startswith("0") or entry.startswith("1")):
-            # 校验是否包含章级状态文件
-            init_file = os.path.join(full_path, "03_本章初始状态.md")
-            if os.path.exists(init_file):
-                dirs.append(full_path)
-    return dirs
-
-
-def build_snapshot(volume_dir, output_file=None):
-    chapter_dirs = find_chapter_dirs(volume_dir)
-    if not chapter_dirs:
-        print(f"警告: 卷目录 [{volume_dir}] 下未找到有效的章级工作区。")
-        return None
-
-    print(f"找到 {len(chapter_dirs)} 个章级工作区，开始顺序重放状态...")
-
-    # 第 1 章初始状态为起点
-    first_chap = chapter_dirs[0]
-    curr_records = parse_md_table(os.path.join(first_chap, "03_本章初始状态.md"))
-
-    total_changes = 0
-    for chap_dir in chapter_dirs:
-        chap_name = os.path.basename(chap_dir)
-        changelog_file = os.path.join(chap_dir, "04_本章状态履历.md")
-        if os.path.exists(changelog_file):
-            ch_records = parse_md_table(changelog_file)
-            if ch_records:
-                curr_records, diffs = merge_states(curr_records, ch_records)
-                total_changes += len(ch_records)
-                print(f"  * {chap_name}: 应用了 {len(ch_records)} 条状态履历")
-
-    vol_name = os.path.basename(volume_dir)
-    rendered = render_md_table(curr_records, title=f"卷末状态快照 · {vol_name} (只读物化视图)")
-
-    if not output_file:
-        output_file = os.path.join(volume_dir, "99_卷末状态快照.md")
-
-    with open(output_file, 'w', encoding='utf-8') as f:
-        f.write(rendered)
-
-    print(f"\n卷末状态快照生成完毕 (全卷累计应用 {total_changes} 条履历): {output_file}")
-    return output_file
+def _fold(novel_dir, changelog_paths):
+    baseline = st.baseline_dir(novel_dir)
+    if not os.path.isdir(baseline):
+        print(f"错误: 冻结基线不存在: {baseline}")
+        sys.exit(1)
+    try:
+        records, _wb = st.fold_all(baseline, changelog_paths, resolver=None)
+    except StateMergeError as e:
+        print(f"\n[阻断] {e}\n先对涉及章运行 merge_chapter_state.py 冻结描述字段后再生成快照。")
+        sys.exit(2)
+    return records
 
 
 def main():
-    parser = argparse.ArgumentParser(description="卷末只读状态快照构建工具")
-    parser.add_argument("--volume-dir", required=True, help="卷工作区目录路径 (如 05_工作区/01_第01部/01_卷01)")
-    parser.add_argument("--output", help="产出的 99_卷末状态快照.md 文件路径")
+    ap = argparse.ArgumentParser(description="只读状态快照（从基线折叠履历，不调 LLM）")
+    g = ap.add_mutually_exclusive_group(required=True)
+    g.add_argument("--volume-dir", help="卷目录：折叠到该卷最后一章（含）")
+    g.add_argument("--at-chapter", help="章目录：折叠到该章之前（不含）= 该章开篇状态")
+    ap.add_argument("--novel-dir", help="小说根目录（缺省自动定位）")
+    ap.add_argument("--output", help="输出文件路径")
+    args = ap.parse_args()
 
-    args = parser.parse_args()
-    build_snapshot(args.volume_dir, args.output)
+    anchor = os.path.abspath(args.volume_dir or args.at_chapter)
+    novel_dir = os.path.abspath(args.novel_dir) if args.novel_dir else st.find_novel_dir(anchor)
+    if not novel_dir:
+        print("错误: 无法定位小说根目录，请用 --novel-dir 指定")
+        sys.exit(1)
+
+    changelogs = st.iter_workspace_changelogs(novel_dir)
+
+    if args.volume_dir:
+        vol = os.path.normpath(anchor)
+        in_vol = [p for p in changelogs if os.path.normpath(p).startswith(vol + os.sep)]
+        if not in_vol:
+            print(f"警告: 卷目录下没有任何 {CHANGELOG_FILENAME}: {vol}")
+            sys.exit(1)
+        last_idx = changelogs.index(in_vol[-1])
+        paths = changelogs[:last_idx + 1]
+        vol_name = os.path.basename(vol)
+        title = f"卷末状态快照 · {vol_name} (只读物化视图)"
+        default_out = os.path.join(vol, "99_卷末状态快照.md")
+    else:
+        target_cl = os.path.normpath(os.path.join(anchor, CHANGELOG_FILENAME))
+        if target_cl in changelogs:
+            idx = changelogs.index(target_cl)
+        else:
+            # 该章可能还没建履历——折叠到「排序位置之前」的全部章
+            idx = len([p for p in changelogs if p < target_cl])
+        paths = changelogs[:idx]
+        chap_name = st.chapter_rel_name(target_cl, novel_dir)
+        title = f"开篇状态快照 · {chap_name} (只读)"
+        default_out = None
+
+    records = _fold(novel_dir, paths)
+    rendered = render_md_table(records, title=title)
+
+    out = args.output or default_out
+    if out:
+        st._atomic_write(out, rendered)
+        print(f"已写入: {out}（{len(records)} 条记录，折叠 {len(paths)} 章）")
+    else:
+        print(rendered)
 
 
 if __name__ == "__main__":

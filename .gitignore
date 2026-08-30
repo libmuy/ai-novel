@@ -5,6 +5,9 @@ __pycache__/
 *.pyc
 # 状态脚本备份
 *.md.bak
+# LLM 本地密钥（不提交）
+02_工具/llm.secret.toml
+llm.secret.toml
 # 临时备份（iCloud 移出前保留，确认后删除）
 01_小说数据/00_苍玄/00_通用模板.bak/
 .obsidian/

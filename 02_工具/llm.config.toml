@@ -1,0 +1,19 @@
+# 状态合并时「描述」类字段智能合并所用的大模型配置。
+#
+# 用途：merge_chapter_state.py 在某章改动描述类字段时，调用一次大模型把
+#       旧描述 + 新描述合并成不丢信息的一段文本（运算-数值/枚举/列表 仍纯 Python）。
+#
+# 密钥不写在本文件（本文件入库）。二选一：
+#   1. 环境变量：export <api_key_env 指定的变量名>=sk-xxx
+#   2. 同目录 llm.secret.toml（已 gitignore）：api_key = "sk-xxx"
+# 优先级：环境变量 > llm.secret.toml
+#
+# 端点须为 OpenAI 兼容的 /chat/completions（DeepSeek / Moonshot / OpenAI /
+# 多数网关 / Anthropic 的 OpenAI 兼容端点均可）。
+
+base_url = "https://api.openai.com/v1"
+model = "gpt-4o-mini"
+api_key_env = "OPENAI_API_KEY"
+timeout = 60
+max_tokens = 4096
+temperature = 0.2
