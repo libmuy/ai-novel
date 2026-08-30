@@ -521,12 +521,29 @@ def main():
     ap.add_argument("novel_dir", help="小说数据目录路径，由调用方指定，脚本不含具体书名硬编码")
     ap.add_argument("--format", choices=["json", "text"], default="json",
                      help="输出格式，默认 json（供 Agent 解析），可选 text（人类阅读）")
+    ap.add_argument("--auto-fix", action="store_true",
+                     help="在审查前自动调用 auto_link_placeholders.py 进行占位符回补修复")
     args = ap.parse_args()
     novel_dir = Path(args.novel_dir)
 
     if not novel_dir.exists():
         print(json.dumps({"error": f"目录不存在: {novel_dir}"}, ensure_ascii=False), file=sys.stderr)
         sys.exit(1)
+
+    if args.auto_fix:
+        try:
+            from auto_link_placeholders import run_auto_link
+            run_auto_link(novel_dir, dry_run=False)
+        except ImportError:
+            # 尝试通过路径导入
+            import importlib.util
+            script_dir = Path(__file__).resolve().parent
+            auto_link_path = script_dir / "auto_link_placeholders.py"
+            if auto_link_path.exists():
+                spec = importlib.util.spec_from_file_location("auto_link_placeholders", auto_link_path)
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                mod.run_auto_link(novel_dir, dry_run=False)
 
     report = run_all_checks(novel_dir)
 
