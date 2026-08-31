@@ -10,14 +10,14 @@
 
 配置
 ----
-- `02_工具/llm.config.toml`（提交入库，无密钥）：
+- `02_工具/00_系统级/llm.config.toml`（提交入库，无密钥）：
       base_url = "https://api.openai.com/v1"
       model = "gpt-4o-mini"
       api_key_env = "OPENAI_API_KEY"
       timeout = 60
       max_tokens = 4096
       temperature = 0.2
-- `02_工具/llm.secret.toml`（可选，已 gitignore）：
+- `02_工具/00_系统级/llm.secret.toml`（可选，已 gitignore）：
       api_key = "sk-..."
 - 密钥优先级：环境变量（api_key_env 指定名）> secret 文件 api_key > 无。
 """

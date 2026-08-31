@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-02_工具/prune_character_sheet.py
+02_工具/01_小说通用工具/prune_character_sheet.py
 根据当前卷号/阶段，切片剪裁主角档案，生成 01_设定/00_主角档案_当前阶段.md
 """
 import sys

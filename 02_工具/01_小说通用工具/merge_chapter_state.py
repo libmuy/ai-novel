@@ -22,7 +22,7 @@
 
 用法
 ----
-    python3 02_工具/merge_chapter_state.py --chapter-dir <章目录> [选项]
+    python3 02_工具/01_小说通用工具/merge_chapter_state.py --chapter-dir <章目录> [选项]
 
       --chapter-dir PATH   必填，要并入 05_工作区/00_全局/01_最新状态/ 的那一章
       --novel-dir PATH     可选，缺省从 --chapter-dir 向上自动定位
@@ -37,7 +37,7 @@ import os
 import shutil
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "00_系统级"))
 
 import state_tree as st  # noqa: E402
 import _llm  # noqa: E402

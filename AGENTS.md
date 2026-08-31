@@ -92,10 +92,10 @@ cp -r 00_通用模板/05_项目骨架模板/ 01_小说数据/<NN>_<小说名>/
 
 跨小说通用的仓库维护/校验工具统一存放于 `02_工具/`（与 `00_通用模板/`、`01_小说数据/` 同级）。工具不属于某本书的数据，也不属于 `00_通用模板/` 的卡片模板/写作规则体系。
 
-### 8.1 一致性审查脚本 `02_工具/audit_consistency.py`
+### 8.1 一致性审查脚本 `02_工具/01_小说通用工具/audit_consistency.py`
 
 - **用途**：审查指定小说目录下的——顶层目录完整性（对照标准骨架 6 目录：`01_设定`/`02_数据库`/`03_规划`/`05_工作区/00_全局/01_最新状态`/`05_工作区`/`10_正文`）、`00_通用模板` 符号链接、`02_数据库/` 各分类总索引与实际文件一致性、`@类型.[TODO-xx]` 占位符回补状态、`04_本章状态履历.md` 字段合法性与「类型」列一致（`workspace_state_type_mismatch`）、`05_工作区/00_全局/01_最新状态/` 与冻结基线每对象文件树的合法性（`global_state_unparseable` / `global_state_header_mismatch` / `global_state_field_illegal` / `global_state_type_mismatch` / `global_state_misfiled` / `global_state_index_out_of_sync` / `state_unknown_prefix`）；**状态漂移** `state_drift`：从冻结基线折叠「已并入」的履历，比对 `05_工作区/00_全局/01_最新状态/` 存盘树，不一致即提示对象文件被手改或上游 04 改动后未重折；**旧模型残留** `legacy_chapter_state_present` / `legacy_global_state_flat`；**未并入章** `state_unmerged_chapters`（info）；**级联专用检查** `cascade_terminal_conflict` / `cascade_item_terminal_conflict`：角色终态（死亡/退场）或物品终态（损毁/易主）之后仍被后续章节履历变更（只在改早期章节、重折后暴露）。
-- **用法**：`python3 02_工具/audit_consistency.py <小说目录路径> --format json`。默认 json 输出，供 Agent 直接解析 `issues` 数组、按 `suggested_action` 执行修改；`--format text` 为人类可读模式。
+- **用法**：`python3 02_工具/01_小说通用工具/audit_consistency.py <小说目录路径> --format json`。默认 json 输出，供 Agent 直接解析 `issues` 数组、按 `suggested_action` 执行修改；`--format text` 为人类可读模式。
 - **使用时机**：建议在每次云端回填分割完成、或占位符回补前后各跑一次；`rebuild_global_state.py` 重折后**必须**跑一次。
 - **局限说明**：脚本对 `00_进度.md` 中任务提示词文件名（如 `02_地理区域提示.md`）存在硬编码耦合，若 `00_通用模板` 任务编号体系调整，需同步更新脚本内 `CATEGORY_KEYWORD_IN_PROGRESS`（与 `STANDARD_TOP_DIRS`）。
 
@@ -105,8 +105,8 @@ cp -r 00_通用模板/05_项目骨架模板/ 01_小说数据/<NN>_<小说名>/
 `05_工作区/00_全局/01_最新状态/` == 冻结基线 `05_工作区/00_全局/00_基线状态/` ⊕ 全部 `04_本章状态履历.md`
 的折叠。描述类字段的 LLM 合并结果存进独立的 append-only 缓存
 `05_工作区/00_全局/00_描述合并缓存.jsonl`（派生数据，按内容指纹做键，禁止手工编辑）；
-`04_本章状态履历.md` 永不被脚本改写，永远是人工原文。共享逻辑在 `02_工具/state_tree.py`，
-LLM 客户端在 `02_工具/_llm.py`。
+`04_本章状态履历.md` 永不被脚本改写，永远是人工原文。共享逻辑在 `02_工具/00_系统级/state_tree.py`，
+LLM 客户端在 `02_工具/00_系统级/_llm.py`。
 
 | 脚本 / 文件 | 用途 |
 |---|---|

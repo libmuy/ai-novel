@@ -13,7 +13,7 @@
 
 2. **强类型引用与自动一致性审查**
    - 采用标准 `@引用` 语法（如 `@人物.[姓名]`、`@势力.[名称]`、`DY-001`、`FH-001`）构建强链接网络；
-   - 内置 `02_工具/audit_consistency.py` 自动化审查工具，实现占位符（`TODO-xxx`）检测与一致性闭环校验。
+   - 内置 `02_工具/01_小说通用工具/audit_consistency.py` 自动化审查工具，实现占位符（`TODO-xxx`）检测与一致性闭环校验。
 
 3. **千万字级 Context Token 优化与分片继承架构**
    - 路由表精准限制单次任务上下文，实现查表型数据离散化（≤1KB 分片）；
@@ -61,19 +61,19 @@ novel-generator/
 ### 1. 运行一致性审查脚本
 检查小说项目的目录完整性、总索引一致性及残留占位符状态：
 ```bash
-python3 02_工具/audit_consistency.py 01_小说数据/00_苍玄 --format text
+python3 02_工具/01_小说通用工具/audit_consistency.py 01_小说数据/00_苍玄 --format text
 ```
 
 ### 2. 运行架构 Token 效率与规模评估
 量化评估路由表加载策略及千万字长篇（3,300+ 章）下的上下文 Token 开销：
 ```bash
-python3 02_工具/eval_architecture.py
+python3 02_工具/00_系统级/eval_architecture.py
 ```
 
 ### 3. 新建小说项目
 用脚本脚手架新小说目录（`NN` 自动递增，建软链、填 AGENTS.md 占位符）：
 ```bash
-python3 02_工具/new_novel.py <小说名>          # 先 --dry-run 看计划
+python3 02_工具/00_系统级/new_novel.py <小说名>          # 先 --dry-run 看计划
 ```
 
 ---

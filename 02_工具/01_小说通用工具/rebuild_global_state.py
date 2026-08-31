@@ -13,7 +13,7 @@
 
 用法
 ----
-    python3 02_工具/rebuild_global_state.py <小说目录> [--dry-run] [--merge-pending] [--backup]
+    python3 02_工具/01_小说通用工具/rebuild_global_state.py <小说目录> [--dry-run] [--merge-pending] [--backup]
 
       --dry-run         打印将对 01_最新状态/ 造成的 diff 与计划追加的缓存条目，不写文件
       --merge-pending   对存在未合并描述变更的章，各调一次 LLM 合并并追加缓存
@@ -28,6 +28,7 @@ import os
 import shutil
 import sys
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "00_系统级"))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import state_tree as st  # noqa: E402
