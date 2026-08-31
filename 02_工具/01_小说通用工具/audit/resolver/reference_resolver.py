@@ -24,6 +24,11 @@ KNOWN_EXTERNAL_ENTITIES = {
     "人物": {"苏砚": "01_设定/00_主角档案.md"}
 }
 
+# 非权威数据子树：生产过程归档 / 可重生成的提示词缓存 / 章级生产现场文件。
+# 这些文件里内联着历史副本与模板占位符样例，不参与 @引用 / Markdown 链接完整性校验
+# （其中的权威部分——状态表——由 state 规则单独校验）。
+NON_AUTHORITATIVE_PREFIXES = ("05_工作区/",)
+
 
 class ReferenceResolver:
     def __init__(self, context: AuditContext):
@@ -33,6 +38,8 @@ class ReferenceResolver:
         refs: List[Reference] = []
         for fi in self.context.files:
             if fi.file_type != "markdown":
+                continue
+            if fi.relative_path.startswith(NON_AUTHORITATIVE_PREFIXES):
                 continue
             refs.extend(self.extract_references(fi))
         return refs
