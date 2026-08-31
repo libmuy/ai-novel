@@ -2,7 +2,6 @@
 全仓通用引用校验规则 (reference.py)
 检查 @实体引用、Markdown 链接、相对路径链接
 """
-import re
 from typing import List
 from ..models import Finding, Severity
 from ..engine import AuditRule
@@ -19,7 +18,9 @@ CATEGORY_DIR_MAP = {
     "资源": "04_资源",
 }
 
-BRACKETED_REALNAME_PATTERN = re.compile(r"@(地名|势力|人物|类型|书籍|伏笔|区域|资源)\.\[(?!TODO-)([^\]]+)\]")
+# 名称类引用必须用方括号（见 00_使用说明.md【引用语法】：方括号是强制的）。
+# @主角 无名称、@道义/@伏笔 用 ID，均不在此列。
+BRACKET_REQUIRED_TYPES = {"地名", "势力", "人物", "类型", "书籍", "区域", "资源"}
 
 
 class ReferenceRule(AuditRule):
@@ -66,22 +67,21 @@ class ReferenceRule(AuditRule):
                         locations=[f"{ref.source_file}:第{ref.source_line}行"]
                     ))
 
-                # 检查方括号包真名的非标准写法
-                m = BRACKETED_REALNAME_PATTERN.search(ref.raw_text)
-                if m:
-                    typ, inner = m.group(1), m.group(2)
+                # 检查名称类引用是否漏了方括号（方括号是强制的）
+                if ref.entity_type in BRACKET_REQUIRED_TYPES and ".[" not in ref.raw_text \
+                        and not ref.target.startswith("TODO-"):
                     findings.append(Finding(
-                        severity=Severity.INFO,
+                        severity=Severity.WARNING,
                         rule=self.name,
                         code="REF003",
-                        message=f"（检测到方括号包真名的非标准写法，建议统一去掉方括号）引用了 @{typ}.[{inner}]",
+                        message=f"名称类引用 {ref.raw_text} 未加方括号；无分隔符时解析器会把后续正文吞进对象名",
                         file=ref.source_file,
                         line=ref.source_line,
                         column=ref.source_column,
                         source=ref.raw_text,
                         target=ref.target,
-                        suggestion=f"将 @{typ}.[{inner}] 改写为标准的 @{typ}.{ref.entity_name} 写法",
-                        category=typ,
+                        suggestion=f"改写为 @{ref.entity_type}.[{ref.entity_name}]",
+                        category=ref.entity_type,
                         locations=[f"{ref.source_file}:第{ref.source_line}行"]
                     ))
 

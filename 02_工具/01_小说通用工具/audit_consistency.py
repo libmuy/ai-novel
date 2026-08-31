@@ -26,6 +26,7 @@ from audit.rules.manuscript import ManuscriptRule
 from audit.rules.planning import PlanningRule
 from audit.rules.setting import SettingRule
 from audit.rules.todo import TodoRule
+from audit.rules.foreshadow import ForeshadowRule
 
 
 def load_field_vocab(novel_dir: Path):
@@ -55,6 +56,7 @@ def get_default_engine(novel_dir: Path) -> AuditEngine:
     engine.register_rule(PlanningRule())
     engine.register_rule(SettingRule())
     engine.register_rule(TodoRule())
+    engine.register_rule(ForeshadowRule())
     return engine
 
 
