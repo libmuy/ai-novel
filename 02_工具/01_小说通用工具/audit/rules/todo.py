@@ -10,6 +10,15 @@ from ..engine import AuditRule
 from ..context import AuditContext
 from ..resolver.todo_resolver import TodoResolver, TODO_PATTERN, TODO_GLOBAL_PREFIXES, CATEGORY_KEYWORD_IN_PROGRESS
 
+# 「待创建条目」区块起始行（标题或引导句）
+_PENDING_SECTION_RE = re.compile(r"待创建条目")
+# 一行里出现 TODO 占位符（类型不限，比 TODO_PATTERN 宽）
+_TODO_INLINE_RE = re.compile(r"\[TODO-[^\]]+\]")
+# 该行看起来是一条「待创建条目」登记（而非正文里的占位引用）
+_PENDING_ENTRY_HINT_RE = re.compile(r"需求|提及位置|类型[:：]")
+# 前向引用必填字段：预计引入卷 / 引入部
+_INTRO_VOLUME_RE = re.compile(r"引入卷|引入部|预计引入")
+
 
 class TodoRule(AuditRule):
     name = "todo"
@@ -103,6 +112,51 @@ class TodoRule(AuditRule):
                 category=typ,
                 locations=sorted(files.keys())
             ))
+
+        # 3b. 规划层（任务 05~11 产出）前向引用 TODO 须带「预计引入卷」
+        for fi in context.files:
+            if fi.data_domain != "03_规划":
+                continue
+            if fi.relative_path.endswith("00_TODO全局注册表.md"):
+                continue
+            lines = fi.content.splitlines()
+            in_section = False
+            missing = []
+            for idx, raw in enumerate(lines, start=1):
+                if _PENDING_SECTION_RE.search(raw):
+                    in_section = True
+                    continue
+                if not in_section:
+                    continue
+                stripped = raw.strip()
+                # 空行不结束区块（区块内可能有空行）；遇到新的二级/三级标题才结束
+                if stripped.startswith("#"):
+                    in_section = False
+                    continue
+                if not _TODO_INLINE_RE.search(raw):
+                    continue
+                if not _PENDING_ENTRY_HINT_RE.search(raw):
+                    continue
+                if not _INTRO_VOLUME_RE.search(raw):
+                    missing.append((idx, stripped))
+            if missing:
+                findings.append(Finding(
+                    severity=Severity.WARNING,
+                    rule=self.name,
+                    code="TODO007",
+                    message=(
+                        f"{fi.relative_path}：规划层「待创建条目」有 {len(missing)} 条 TODO 缺「预计引入卷」字段；"
+                        "任务 05~11 的 TODO 仅限跨弧前向对象/承重对象，须注明预计引入的部/卷"
+                    ),
+                    file=fi.relative_path,
+                    line=missing[0][0],
+                    suggestion=(
+                        "为每条前向引用 TODO 补「预计引入卷：<部/卷编号>」；"
+                        "若该对象实为本卷近场对象，应改为当场创建实名实体而非登记 TODO"
+                    ),
+                    category=None,
+                    locations=[f"{fi.relative_path}:第{ln}行" for ln, _ in missing]
+                ))
 
         # 4. 双向一致性检查：TODO 与实体卡片实际状态对比
         for todo in todos:

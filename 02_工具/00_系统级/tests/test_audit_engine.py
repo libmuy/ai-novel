@@ -106,6 +106,42 @@ class TestAuditEngine(unittest.TestCase):
         codes = [f.code for f in findings]
         self.assertIn("TODO006", codes)
 
+    def test_todo_forward_ref_missing_intro_volume(self):
+        plan_dir = self.novel_dir / "03_规划"
+        plan_dir.mkdir(exist_ok=True)
+        plan_file = plan_dir / "规划.md"
+        plan_file.write_text(
+            "# 全书规划\n\n第三部登场的 @势力.[TODO-001]\n\n"
+            "## 待创建条目\n"
+            "- [ ] @势力.[TODO-001]（类型：势力；需求：后期揭示的隐藏势力；提及位置：规划.md）\n"
+            "- [ ] @人物.[TODO-002]（类型：人物；需求：最终反派；预计引入卷：第3部/卷09；提及位置：规划.md）\n",
+            encoding="utf-8",
+        )
+
+        context = AuditContext(self.novel_dir)
+        rule = TodoRule()
+        findings = rule.run(context)
+        todo007 = [f for f in findings if f.code == "TODO007"]
+        self.assertEqual(len(todo007), 1)
+        # 只有缺「预计引入卷」的 TODO-001 那一行被标记
+        self.assertIn("第6行", "".join(todo007[0].locations))
+        self.assertEqual(len(todo007[0].locations), 1)
+
+    def test_todo_forward_ref_with_intro_volume_ok(self):
+        plan_dir = self.novel_dir / "03_规划"
+        plan_dir.mkdir(exist_ok=True)
+        plan_file = plan_dir / "规划.md"
+        plan_file.write_text(
+            "# 全书规划\n\n## 待创建条目\n"
+            "- [ ] @人物.[TODO-001]（类型：人物；需求：最终反派；预计引入卷：第3部/卷09；提及位置：规划.md）\n",
+            encoding="utf-8",
+        )
+
+        context = AuditContext(self.novel_dir)
+        rule = TodoRule()
+        findings = rule.run(context)
+        self.assertEqual([f for f in findings if f.code == "TODO007"], [])
+
     def test_path_traversal_prevention(self):
         broken_file = self.novel_dir / "01_设定" / "test_escape.md"
         broken_file.write_text("逃逸 [秘密](../../secret.md)", encoding="utf-8")
