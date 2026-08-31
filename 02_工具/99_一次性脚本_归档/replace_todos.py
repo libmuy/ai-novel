@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 批量替换所有TODO占位符为全局ID
-用法: python3 02_工具/replace_todos.py
+用法: python3 02_工具/99_一次性脚本_归档/replace_todos.py
 """
 import re
 import os

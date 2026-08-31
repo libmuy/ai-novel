@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-02_工具/auto_link_placeholders.py
+02_工具/01_小说通用工具/auto_link_placeholders.py
 
 自动化 Agent 占位符回补与拓扑修复工具 (落地计划 5)
 
 用法:
-    python3 02_工具/auto_link_placeholders.py <小说目录路径> [--dry-run]
+    python3 02_工具/01_小说通用工具/auto_link_placeholders.py <小说目录路径> [--dry-run]
 
 功能:
 1. 读取小说目录下的 02_数据库/00_TODO全局注册表.md 以及 02_数据库/ 各分类下的实体定稿文件，

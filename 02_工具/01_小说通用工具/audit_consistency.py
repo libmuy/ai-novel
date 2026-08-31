@@ -33,6 +33,25 @@ VALID_MERGE_TYPES = {"运算-数值", "运算-枚举", "运算-列表", "描述"
 # v2: 扩展至匹配所有6种引用类型
 TODO_PATTERN = re.compile(r"@(地名|势力|人物|类型|书籍|伏笔)\.\[TODO-([^\]]+)\]")
 
+# 方括号包真名的非标准写法正则
+BRACKETED_REALNAME_PATTERN = re.compile(r"@(地名|势力|人物|类型|书籍|伏笔|区域)\.\[(?!TODO-)([^\]]+)\]")
+
+# 真实名字引用正则
+REAL_NAME_PATTERN = re.compile(r"@(地名|势力|人物|类型|书籍|伏笔|区域)\.([^\[\]\s\n\r\t，。！？；：、（）“”‘’«»〈〉《》`~!@#$%^&*()+=|\\{}:;\"'\''<>,/?]+)")
+
+KNOWN_EXTERNAL_ENTITIES = {
+    "人物": {"苏砚": "01_设定/00_主角档案.md"}
+}
+
+CATEGORY_DIR_MAP = {
+    "地名": "02_地理区域",
+    "区域": "02_地理区域",
+    "势力": "03_势力组织",
+    "人物": "07_人物",
+    "书籍": "06_书籍",
+    "类型": "04_资源",
+}
+
 # v2: 扩展至覆盖全部任务类别（与00_通用模板/00_使用说明.md路由表对齐）
 CATEGORY_KEYWORD_IN_PROGRESS = {
     "地名": "02_地理区域提示.md",
@@ -205,19 +224,18 @@ def parse_progress_status(novel_dir: Path):
 
 def check_stale_placeholders(novel_dir: Path, issues: list):
     status = parse_progress_status(novel_dir)
-    db = novel_dir / "02_数据库"
-    if not db.exists():
-        return
+    scan_dirs = [novel_dir / d for d in ["01_设定", "02_数据库", "03_规划"] if (novel_dir / d).exists()]
     findings = defaultdict(lambda: defaultdict(set))
-    for f in db.rglob("*.md"):
-        if f.name == "00_TODO全局注册表.md":
-            continue
-        text = read(f)
-        for m in TODO_PATTERN.finditer(text):
-            typ, num = m.group(1), m.group(2)
-            if "序号" in num or "xx" in num.lower():
+    for d in scan_dirs:
+        for f in d.rglob("*.md"):
+            if f.name == "00_TODO全局注册表.md":
                 continue
-            findings[typ][f.relative_to(novel_dir).as_posix()].add(num)
+            text = read(f)
+            for m in TODO_PATTERN.finditer(text):
+                typ, num = m.group(1), m.group(2)
+                if "序号" in num or "xx" in num.lower():
+                    continue
+                findings[typ][f.relative_to(novel_dir).as_posix()].add(num)
 
     for typ, files in findings.items():
         final_status = status.get(typ, "")
@@ -259,6 +277,110 @@ def check_id_frequency(novel_dir: Path, issues: list, prefixes=("WR-", "DY-", "R
     })
 
 
+def check_real_name_references(novel_dir: Path, issues: list):
+    """校验 01_设定、02_数据库、03_规划、10_正文中引用的真实名字在数据库中是否存在"""
+    db_dir = novel_dir / "02_数据库"
+    files_cache = {}
+    for cat, sub in CATEGORY_DIR_MAP.items():
+        cat_path = db_dir / sub
+        if cat_path.exists():
+            files_cache[cat] = [f.name for f in cat_path.rglob("*.md")]
+        else:
+            files_cache[cat] = []
+
+    def entity_exists(typ: str, norm_name: str) -> bool:
+        if typ in KNOWN_EXTERNAL_ENTITIES and norm_name in KNOWN_EXTERNAL_ENTITIES[typ]:
+            return True
+        flist = files_cache.get(typ, [])
+        for fname in flist:
+            if norm_name in fname:
+                return True
+        return False
+
+    def normalize_name(name: str) -> str:
+        m = re.split(r"[，。！？；：、（）“”‘’\s\[\]]", name)
+        return m[0] if m else name
+
+    scan_dirs = [novel_dir / d for d in ["01_设定", "02_数据库", "03_规划", "10_正文"] if (novel_dir / d).exists()]
+
+    for d in scan_dirs:
+        for f in d.rglob("*.md"):
+            try:
+                lines = read(f).splitlines()
+            except Exception:
+                continue
+            rel_path = f.relative_to(novel_dir).as_posix()
+            for idx, line in enumerate(lines, 1):
+                # 检查 [?!TODO-] 方括号包真名
+                for m in BRACKETED_REALNAME_PATTERN.finditer(line):
+                    typ, inner = m.group(1), m.group(2)
+                    norm_name = normalize_name(inner)
+                    if len(norm_name) < 2 or typ == "伏笔":
+                        continue
+                    target_dir = CATEGORY_DIR_MAP.get(typ, "02_数据库")
+                    if not entity_exists(typ, norm_name):
+                        issues.append({
+                            "check": "real_name_reference_missing",
+                            "severity": "error",
+                            "category": typ,
+                            "detail": f"（检测到方括号包真名的非标准写法，建议统一去掉方括号）引用了真实名字「{norm_name}」，但在 02_数据库/{target_dir}/ 下未找到匹配文件",
+                            "locations": [f"{rel_path}:第{idx}行"],
+                            "suggested_action": "确认该名字是否有拼写错误；如果是应该存在但尚未建卡的实体，改写为 @类型.[TODO-序号] 占位符并登记到全局注册表；如果是已废弃名称，删除或更正该处引用",
+                        })
+                    else:
+                        issues.append({
+                            "check": "bracketed_realname_format",
+                            "severity": "info",
+                            "category": typ,
+                            "detail": f"（检测到方括号包真名的非标准写法，建议统一去掉方括号）引用了 @{typ}.[{inner}]",
+                            "locations": [f"{rel_path}:第{idx}行"],
+                            "suggested_action": f"将 @{typ}.[{inner}] 改写为标准的 @{typ}.{norm_name} 写法",
+                        })
+
+                # 检查非方括号真名引用
+                for m in REAL_NAME_PATTERN.finditer(line):
+                    typ, raw_name = m.group(1), m.group(2)
+                    if raw_name.startswith("TODO-") or typ == "伏笔":
+                        continue
+                    norm_name = normalize_name(raw_name)
+                    if len(norm_name) < 2:
+                        continue
+                    if not entity_exists(typ, norm_name):
+                        target_dir = CATEGORY_DIR_MAP.get(typ, "02_数据库")
+                        issues.append({
+                            "check": "real_name_reference_missing",
+                            "severity": "error",
+                            "category": typ,
+                            "detail": f"引用了真实名字「{norm_name}」，但在 02_数据库/{target_dir}/ 下未找到匹配文件",
+                            "locations": [f"{rel_path}:第{idx}行"],
+                            "suggested_action": "确认该名字是否有拼写错误；如果是应该存在但尚未建卡的实体，改写为 @类型.[TODO-序号] 占位符并登记到全局注册表；如果是已废弃名称，删除或更正该处引用",
+                        })
+
+
+def check_no_placeholder_syntax_in_manuscript(novel_dir: Path, issues: list):
+    """校验 10_正文/ 下纯净性，不包含任何 @(地名|势力|人物|类型|书籍|伏笔|区域). 引用语法"""
+    manuscript_dir = novel_dir / "10_正文"
+    if not manuscript_dir.exists():
+        return
+    pattern = re.compile(r"@(地名|势力|人物|类型|书籍|伏笔|区域)\.")
+    for f in manuscript_dir.rglob("*.md"):
+        try:
+            lines = read(f).splitlines()
+        except Exception:
+            continue
+        rel_path = f.relative_to(novel_dir).as_posix()
+        for idx, line in enumerate(lines, 1):
+            if pattern.search(line):
+                issues.append({
+                    "check": "manuscript_purity",
+                    "severity": "error",
+                    "category": None,
+                    "detail": f"正文中存在数据引用语法残留「{line.strip()}」",
+                    "locations": [f"{rel_path}:第{idx}行"],
+                    "suggested_action": "正文为最终读者成稿，请删除或更正其中的数据层引用语法 @类型.",
+                })
+
+
 def check_todo_registry(novel_dir: Path, issues: list):
     """校验所有 @类型.[TODO-xxx] 引用是否在全局注册表中有对应条目"""
     registry_path = novel_dir / "02_数据库" / "00_TODO全局注册表.md"
@@ -278,7 +400,7 @@ def check_todo_registry(novel_dir: Path, issues: list):
     for m in re.finditer(r"(TODO-[A-Z]{2}-\d+)", registry_text):
         registry_ids.add(m.group(1))
 
-    data_dirs = [novel_dir / "01_设定", novel_dir / "02_数据库"]
+    data_dirs = [novel_dir / "01_设定", novel_dir / "02_数据库", novel_dir / "03_规划"]
     orphans = []
     for data_dir in data_dirs:
         if not data_dir.exists():
@@ -631,7 +753,7 @@ def check_changelog_parseable(novel_dir: Path, issues: list):
 def _load_state_helpers():
     """惰性导入 state_tree 模块（同目录）。失败返回 None。"""
     try:
-        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        sys.path.insert(0, str(Path(__file__).resolve().parent / ".." / "00_系统级"))
         import state_tree
         return state_tree
     except Exception:
@@ -796,7 +918,7 @@ def check_state_drift(novel_dir: Path, issues: list):
             "detail": (f"01_最新状态/ 与「基线 ⊕ 已并入履历（折叠至 {folded}）」的折叠结果不一致，共 {len(diff)} 处："
                        "对象文件可能被绕过脚本手改，或上游某章 04 改动后未跑 rebuild_global_state.py"),
             "locations": diff,
-            "suggested_action": "运行 python3 02_工具/rebuild_global_state.py <小说目录>（先 --dry-run 复核）",
+            "suggested_action": "运行 python3 02_工具/01_小说通用工具/rebuild_global_state.py <小说目录>（先 --dry-run 复核）",
         })
 
 
@@ -821,7 +943,7 @@ def check_state_unmerged_chapters(novel_dir: Path, issues: list):
             "check": "state_unmerged_chapters", "severity": "info", "category": "01_最新状态",
             "detail": f"{len(unmerged)} 章的履历尚未并入 01_最新状态/",
             "locations": unmerged,
-            "suggested_action": "对每章按顺序运行 python3 02_工具/merge_chapter_state.py --chapter-dir <章目录>",
+            "suggested_action": "对每章按顺序运行 python3 02_工具/01_小说通用工具/merge_chapter_state.py --chapter-dir <章目录>",
         })
 
 
@@ -868,7 +990,7 @@ def check_stale_descriptive_merge(novel_dir: Path, issues: list):
             "category": "01_最新状态",
             "detail": f"存在未命中合并缓存的描述字段变更: {e}",
             "locations": [],
-            "suggested_action": "运行 python3 02_工具/rebuild_global_state.py --merge-pending <小说目录>",
+            "suggested_action": "运行 python3 02_工具/01_小说通用工具/rebuild_global_state.py --merge-pending <小说目录>",
         })
 
 
@@ -879,6 +1001,8 @@ def run_all_checks(novel_dir: Path) -> dict:
     check_index_consistency(novel_dir, issues)
     check_stale_placeholders(novel_dir, issues)
     check_id_frequency(novel_dir, issues)
+    check_real_name_references(novel_dir, issues)
+    check_no_placeholder_syntax_in_manuscript(novel_dir, issues)
     check_todo_registry(novel_dir, issues)
     check_geographic_hierarchy(novel_dir, issues)
     check_id_format(novel_dir, issues)

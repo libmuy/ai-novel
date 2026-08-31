@@ -15,7 +15,7 @@
 （对象名、数值对不上等）不在本工具职责内。
 
 用法:
-    python3 02_工具/migrate_state_layout.py <小说目录> [--dry-run]
+    python3 02_工具/99_一次性脚本_归档/migrate_state_layout.py <小说目录> [--dry-run]
 
 迁移后请对最新章运行 merge_chapter_state.py 让全局状态推进到该章之后的终态。
 """
@@ -24,7 +24,7 @@ import argparse
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "00_系统级"))
 
 import state_tree as st  # noqa: E402
 
@@ -61,9 +61,9 @@ NEW_EXPLAIN = """\
 
 ## 维护（全部脚本覆盖写入，禁止手工编辑）
 
-- 章末推进：`python3 02_工具/merge_chapter_state.py --chapter-dir <本章>`
-- 改早期章后重折：`python3 02_工具/rebuild_global_state.py <小说目录>`（先 --dry-run）
-- 某章开篇状态：`python3 02_工具/build_state_snapshot.py --at-chapter <章目录>`
+- 章末推进：`python3 02_工具/01_小说通用工具/merge_chapter_state.py --chapter-dir <本章>`
+- 改早期章后重折：`python3 02_工具/01_小说通用工具/rebuild_global_state.py <小说目录>`（先 --dry-run）
+- 某章开篇状态：`python3 02_工具/01_小说通用工具/build_state_snapshot.py --at-chapter <章目录>`
 
 字段名与类型的权威定义见 `00_通用模板/03_字段词表.md`。
 """
@@ -128,8 +128,8 @@ def main():
         os.remove(p)
 
     print("\n迁移完成。下一步：")
-    print("  python3 02_工具/audit_consistency.py " + os.path.relpath(novel) + " --format text")
-    print("  python3 02_工具/merge_chapter_state.py --chapter-dir <最新章目录>   # 让全局状态推进到该章之后")
+    print("  python3 02_工具/01_小说通用工具/audit_consistency.py " + os.path.relpath(novel) + " --format text")
+    print("  python3 02_工具/01_小说通用工具/merge_chapter_state.py --chapter-dir <最新章目录>   # 让全局状态推进到该章之后")
 
 
 def _rglob(root, name):

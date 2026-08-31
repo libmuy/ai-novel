@@ -4,7 +4,7 @@
 """
 新建小说脚手架 (new_novel.py) —— 纯文件操作，无 LLM
 
-    python3 02_工具/new_novel.py <小说名> [--dry-run]
+    python3 02_工具/00_系统级/new_novel.py <小说名> [--dry-run]
 
 步骤：
   1. 算目录编号 NN（01_小说数据/ 下现有 `NN_*` 目录最大值 +1，两位，从 00 起）

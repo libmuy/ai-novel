@@ -11,18 +11,18 @@
 两种模式
 --------
     # 卷末快照：折叠到该卷最后一章（含），写 99_卷末状态快照.md
-    python3 02_工具/build_state_snapshot.py --volume-dir <卷目录> [--output PATH]
+    python3 02_工具/01_小说通用工具/build_state_snapshot.py --volume-dir <卷目录> [--output PATH]
 
     # 某章开篇状态：折叠到该章之前（不含），默认打印 stdout
     #   —— 回溯改旧章时，滑动窗口任务需要「第 N 章开篇时的世界状态」
-    python3 02_工具/build_state_snapshot.py --at-chapter <章目录> [--output PATH]
+    python3 02_工具/01_小说通用工具/build_state_snapshot.py --at-chapter <章目录> [--output PATH]
 """
 
 import argparse
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "00_系统级"))
 
 import state_tree as st  # noqa: E402
 from state_tree import render_md_table, StateMergeError, CHANGELOG_FILENAME  # noqa: E402

@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "01_小说通用工具"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import audit_consistency as audit
