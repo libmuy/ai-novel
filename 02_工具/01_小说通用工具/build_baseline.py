@@ -15,7 +15,7 @@
 **纯标准库、无 LLM、无网络。绝不写 00_基线状态/ 或 01_最新状态/。**
 
 用法:
-    python3 02_工具/00_系统级/build_baseline.py <小说目录> [--out DIR] [--format text|json]
+    python3 02_工具/01_小说通用工具/build_baseline.py <小说目录> [--out DIR] [--format text|json]
 
 判据:
     - 只登记「基线初值」列**非空**的字段（空 = 内容判断留给用户，不编）。
@@ -29,7 +29,7 @@ import os
 import re
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "00_系统级"))
 import state_tree  # noqa: E402
 
 

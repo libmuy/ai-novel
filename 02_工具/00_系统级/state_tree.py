@@ -462,6 +462,98 @@ def object_id_to_relpath(object_id):
 
 
 # ---------------------------------------------------------------------------
+# 单章细纲「## 出场对象」<-> 状态对象 ID（供 build_state_snapshot / audit 共用）
+# ---------------------------------------------------------------------------
+
+CHAPTER_OPENER_FILENAME = "03_本章开篇状态.md"
+
+# @引用前缀 -> 状态对象 ID 前缀
+_REF_PREFIX_TO_STATE = {"人物": "角色", "势力": "势力", "物品": "物品", "财务": "财务", "世界": "世界"}
+_CAST_CELL_RE = re.compile(r"@(主角|人物|势力|物品|财务|世界)(?:\.\[([^\]]+)\])?")
+_CHAPTER_DIR_RE = re.compile(r"^(\d+_第\d+部)/(\d+_卷(\d+))/(章\d+)$")
+
+
+def protagonist_state_id(novel_dir):
+    """从 01_设定/00_主角档案.md 的「姓名」字段推导主角状态对象 ID（`角色.<姓名>`）。找不到返回 None。"""
+    card = os.path.join(novel_dir, "01_设定", "00_主角档案.md")
+    try:
+        with open(card, encoding="utf-8") as f:
+            txt = f.read()
+    except OSError:
+        return None
+    m = re.search(r"^\|\s*姓名\s*\|[^|\n]*\|\s*([^|\n]+?)\s*\|", txt, re.M)
+    return f"角色.{m.group(1).strip()}" if m else None
+
+
+def plan_path_for_chapter(chapter_dir, novel_dir):
+    """章目录 `05_工作区/01_第01部/01_卷01/章0001` -> 单章细纲
+    `03_规划/01_第01部/01_卷01/规划_卷01_章0001.md` 的绝对路径。不匹配返回 None。"""
+    ws = os.path.join(os.path.abspath(novel_dir), WORKSPACE_DIRNAME)
+    rel = os.path.relpath(os.path.abspath(chapter_dir), ws).replace(os.sep, "/")
+    m = _CHAPTER_DIR_RE.match(rel)
+    if not m:
+        return None
+    part_dir, vol_dir, vol_num, chap = m.group(1), m.group(2), m.group(3), m.group(4)
+    return os.path.join(os.path.abspath(novel_dir), "03_规划", part_dir, vol_dir,
+                        f"规划_卷{vol_num}_{chap}.md")
+
+
+def parse_chapter_cast(plan_path, protagonist_id=None):
+    """解析单章细纲的「## 出场对象」小节，返回状态对象 ID 集合。
+    文件不存在 / 无该小节 -> None（调用方据此退化为「全量」并告警）。"""
+    if not plan_path or not os.path.isfile(plan_path):
+        return None
+    with open(plan_path, encoding="utf-8") as f:
+        txt = f.read()
+    m = re.search(r"^#{1,4}\s*出场对象\s*$(.*?)(?=^#{1,4}\s|\Z)", txt, re.M | re.S)
+    if not m:
+        return None
+    ids = set()
+    for line in m.group(1).splitlines():
+        s = line.strip()
+        if not s.startswith("|"):
+            continue
+        cells = s.split("|")
+        cell = cells[1].strip().strip("`") if len(cells) > 1 else ""
+        cm = _CAST_CELL_RE.match(cell)
+        if not cm:
+            continue
+        typ, name = cm.group(1), cm.group(2)
+        if typ == "主角":
+            if protagonist_id:
+                ids.add(protagonist_id)
+            continue
+        if not name:
+            continue
+        pref = _REF_PREFIX_TO_STATE.get(typ)
+        if pref:
+            ids.add(f"{pref}.{name.strip()}")
+    return ids or None
+
+
+def render_chapter_opener(records, chap_name, cast_ids=None, missing_ids=None):
+    """渲染 03_本章开篇状态.md（派生视图 · 禁止手工编辑）。"""
+    lines = [
+        f"# 本章开篇状态 · {chap_name}",
+        "",
+        "> 派生视图 · 由 build_state_snapshot.py --write-chapter-openers 生成 · **禁止手工编辑**",
+        "> 权威数据 = 05_工作区/00_全局/00_基线状态/ + 各章 04_本章状态履历.md",
+        "> 要修改本章起点，请去改上游章节的履历，然后重折。",
+    ]
+    if cast_ids is None:
+        lines.append("> ⚠ 未找到单章细纲的「## 出场对象」小节——本文件为**全量**开篇状态。")
+    else:
+        lines.append(f"> 出场对象清单（{len(cast_ids)}）：{'、'.join(sorted(cast_ids))}")
+        if missing_ids:
+            lines.append(f"> 清单中本章开篇尚无状态的对象（应在本章履历以「新建」引入）：{'、'.join(sorted(missing_ids))}")
+    lines += ["", "| 对象ID | 字段 | 类型 | 值 |", "| --- | --- | --- | --- |"]
+    for r in records:
+        lines.append(f"| {r['object_id']} | {r['field']} | {r['type']} | {r['value']} |")
+    lines.append("")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # 目录发现
 # ---------------------------------------------------------------------------
 

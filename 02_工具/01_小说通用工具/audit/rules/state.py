@@ -132,8 +132,48 @@ class StateRule(AuditRule):
             self._check_state_unmerged_chapters(context, novel_dir, stmod, findings)
             self._check_cascade_terminal_conflicts(context, novel_dir, stmod, findings)
             self._check_stale_descriptive_merge(context, novel_dir, stmod, findings)
+            self._check_chapter_opener_drift(context, novel_dir, stmod, findings)
 
         return findings
+
+    def _check_chapter_opener_drift(self, context: AuditContext, novel_dir: Path, stmod: Any, findings: list):
+        """03_本章开篇状态.md（派生视图）与「基线 ⊕ 早于本章的履历、按细纲出场对象裁剪」的重算结果不符
+        → 有人手改了派生文件，或改了上游履历后漏跑 build_state_snapshot.py --write-chapter-openers。"""
+        baseline = novel_dir / "05_工作区" / "00_全局" / "00_基线状态"
+        if not baseline.exists():
+            return
+        opener_name = getattr(stmod, "CHAPTER_OPENER_FILENAME", "03_本章开篇状态.md")
+        changelogs = stmod.iter_workspace_changelogs(str(novel_dir))
+        prot = stmod.protagonist_state_id(str(novel_dir))
+        cache = stmod.load_merge_cache(str(novel_dir))
+        drift = []
+        for i, cl in enumerate(changelogs):
+            chap_dir = Path(cl).parent
+            opener_path = chap_dir / opener_name
+            if not opener_path.exists():
+                continue
+            try:
+                expected, _ = stmod.fold_all(str(baseline), changelogs[:i], cache=cache, resolver=None)
+            except stmod.StateMergeError:
+                continue  # 折叠不了的问题由 STATE015 报
+            cast = stmod.parse_chapter_cast(stmod.plan_path_for_chapter(str(chap_dir), str(novel_dir)), prot)
+            if cast is not None:
+                expected = [r for r in expected if r["object_id"] in cast]
+            exp_map = {(r["object_id"], r["field"]): r["value"] for r in expected}
+            got_map = {(r["object_id"], r["field"]): r["value"]
+                       for r in stmod.parse_md_table(str(opener_path), strict=False)}
+            rel = stmod.chapter_rel_name(str(cl), str(novel_dir))
+            for k in sorted(set(exp_map) | set(got_map)):
+                if exp_map.get(k) != got_map.get(k):
+                    drift.append(f"{rel}: {k[0]} | {k[1]}  (重算「{exp_map.get(k)}」≠ 存盘「{got_map.get(k)}」)")
+        if drift:
+            findings.append(Finding(
+                severity=Severity.WARNING, rule=self.name, code="STATE025",
+                message=f"发现 {len(drift)} 处 03_本章开篇状态.md 与重算结果不符（派生文件被手改，或上游履历改动后漏刷新）",
+                file=None,
+                suggestion="跑 `python3 02_工具/01_小说通用工具/build_state_snapshot.py --write-chapter-openers <小说目录>` 重新物化；不要手工编辑 03_本章开篇状态.md",
+                category="05_工作区", locations=drift,
+            ))
 
     def _check_state_tree(self, context: AuditContext, state_dir: Path, label: str, vocab: dict, findings: list):
         if not state_dir.exists():

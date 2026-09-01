@@ -274,5 +274,57 @@ class TestUnknownTypeRaises(unittest.TestCase):
                 st.parse_md_table(path, strict=True)
 
 
+class TestChapterOpeners(unittest.TestCase):
+    """W4.1：--write-chapter-openers 生成 03_本章开篇状态.md，按细纲「## 出场对象」裁剪"""
+
+    def _novel(self, td):
+        novel = make_novel(td, baseline_records=[
+            ["角色.苏砚", "境界", "运算-枚举", "凡人"],
+            ["角色.柳禾", "身体状况", "描述", "肺痨晚期"],
+            ["势力.黑石会", "与主角互动状态", "运算-枚举", "敌对"],
+        ], chapters={
+            "01_第01部/01_卷01/章0001": [
+                ["角色.苏砚", "境界", "运算-枚举", "炼气一层", "1", "2026-01-01", "修改"],
+            ],
+            "01_第01部/01_卷01/章0002": [],
+        })
+        # 主角档案（供 protagonist_state_id）
+        os.makedirs(os.path.join(novel, "01_设定"), exist_ok=True)
+        with open(os.path.join(novel, "01_设定", "00_主角档案.md"), "w", encoding="utf-8") as f:
+            f.write("# 主角\n\n| 字段 | 必填 | 内容 |\n|---|---|---|\n| 姓名 | (必) | 苏砚 |\n")
+        # 章0002 细纲：只声明苏砚 + 黑石会
+        pd = os.path.join(novel, "03_规划", "01_第01部", "01_卷01")
+        os.makedirs(pd, exist_ok=True)
+        with open(os.path.join(pd, "规划_卷01_章0002.md"), "w", encoding="utf-8") as f:
+            f.write("# 细纲\n\n## 出场对象\n\n| 对象ID | 出场方式 |\n|---|---|\n"
+                    "| `@主角` | 登场 |\n| `@势力.[黑石会]` | 提及 |\n")
+        return novel
+
+    def test_openers_written_and_filtered(self):
+        import build_state_snapshot as bss
+        with tempfile.TemporaryDirectory() as td:
+            novel = self._novel(td)
+            written = bss.write_chapter_openers(novel, verbose=False)
+            self.assertEqual(len(written), 2)
+
+            # 章0001：无细纲 → 全量，且为「基线」（早于本章无履历）
+            o1 = open(os.path.join(novel, "05_工作区/01_第01部/01_卷01/章0001/03_本章开篇状态.md")).read()
+            self.assertIn("角色.苏砚 | 境界 | 运算-枚举 | 凡人", o1)   # 基线值，未折叠本章
+            self.assertIn("未找到单章细纲", o1)
+
+            # 章0002：有细纲，只留 苏砚 + 黑石会；苏砚境界已折叠章0001 → 炼气一层
+            o2 = open(os.path.join(novel, "05_工作区/01_第01部/01_卷01/章0002/03_本章开篇状态.md")).read()
+            self.assertIn("角色.苏砚 | 境界 | 运算-枚举 | 炼气一层", o2)
+            self.assertNotIn("角色.柳禾", o2)      # 被出场对象清单裁掉
+            self.assertIn("势力.黑石会", o2)
+
+    def test_cast_parsing(self):
+        with tempfile.TemporaryDirectory() as td:
+            novel = self._novel(td)
+            plan = os.path.join(novel, "03_规划/01_第01部/01_卷01/规划_卷01_章0002.md")
+            cast = st.parse_chapter_cast(plan, "角色.苏砚")
+            self.assertEqual(cast, {"角色.苏砚", "势力.黑石会"})
+
+
 if __name__ == "__main__":
     unittest.main()

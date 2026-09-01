@@ -8,7 +8,7 @@
 **只读、永不调 LLM**：折叠范围内若有未合并的描述字段变更 -> 报错、退出码 2
 （提示先对那些章跑 merge_chapter_state.py）。
 
-两种模式
+三种模式
 --------
     # 卷末快照：折叠到该卷最后一章（含），写 99_卷末状态快照.md
     python3 02_工具/01_小说通用工具/build_state_snapshot.py --volume-dir <卷目录> [--output PATH]
@@ -16,6 +16,11 @@
     # 某章开篇状态：折叠到该章之前（不含），默认打印 stdout
     #   —— 回溯改旧章时，滑动窗口任务需要「第 N 章开篇时的世界状态」
     python3 02_工具/01_小说通用工具/build_state_snapshot.py --at-chapter <章目录> [--output PATH]
+
+    # 逐章开篇状态物化（W4.1）：为每章生成/刷新 03_本章开篇状态.md（值拷贝、派生视图）
+    #   按各章单章细纲的「## 出场对象」小节裁剪；清单缺失则写全量并告警。
+    #   merge_chapter_state.py / rebuild_global_state.py 写完最新状态后会自动调用本模式。
+    python3 02_工具/01_小说通用工具/build_state_snapshot.py --write-chapter-openers <小说目录>
 """
 
 import argparse
@@ -42,14 +47,61 @@ def _fold(novel_dir, changelog_paths):
     return records
 
 
+def write_chapter_openers(novel_dir, *, verbose=True):
+    """为每个已建履历的章生成/刷新 03_本章开篇状态.md（派生视图）。
+    第 N 章开篇状态 = 基线 ⊕ 折叠「排在第 N 章之前」的全部章履历，再按第 N 章
+    单章细纲的「## 出场对象」清单裁剪。返回写入路径列表。
+
+    供 CLI（--write-chapter-openers）与 merge/rebuild 收尾自动调用。
+    基线不存在时静默跳过（返回 []）。"""
+    baseline = st.baseline_dir(novel_dir)
+    if not os.path.isdir(baseline):
+        if verbose:
+            print("跳过逐章开篇状态刷新：冻结基线尚未初始化")
+        return []
+    changelogs = st.iter_workspace_changelogs(novel_dir)
+    prot = st.protagonist_state_id(novel_dir)
+    written = []
+    for i, cl in enumerate(changelogs):
+        records = _fold(novel_dir, changelogs[:i])   # 严格早于本章的全部章
+        chap_dir = os.path.dirname(cl)
+        chap_name = st.chapter_rel_name(cl, novel_dir)
+        cast = st.parse_chapter_cast(st.plan_path_for_chapter(chap_dir, novel_dir), prot)
+        if cast is None:
+            shown, missing = records, None
+        else:
+            present = {r["object_id"] for r in records}
+            shown = [r for r in records if r["object_id"] in cast]
+            missing = cast - present
+        out = os.path.join(chap_dir, st.CHAPTER_OPENER_FILENAME)
+        st._atomic_write(out, st.render_chapter_opener(shown, chap_name, cast, missing))
+        written.append(out)
+        if verbose:
+            tag = "全量(无出场对象清单)" if cast is None else f"{len(shown)}/{len(records)} 对象"
+            print(f"  开篇状态: {chap_name}  [{tag}]")
+    return written
+
+
 def main():
     ap = argparse.ArgumentParser(description="只读状态快照（从基线折叠履历，不调 LLM）")
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument("--volume-dir", help="卷目录：折叠到该卷最后一章（含）")
     g.add_argument("--at-chapter", help="章目录：折叠到该章之前（不含）= 该章开篇状态")
+    g.add_argument("--write-chapter-openers", metavar="小说目录",
+                   help="为每章生成/刷新 03_本章开篇状态.md（按细纲「## 出场对象」裁剪）")
     ap.add_argument("--novel-dir", help="小说根目录（缺省自动定位）")
     ap.add_argument("--output", help="输出文件路径")
     args = ap.parse_args()
+
+    if args.write_chapter_openers:
+        nd = os.path.abspath(args.write_chapter_openers)
+        nd = nd if os.path.isdir(os.path.join(nd, "05_工作区")) else st.find_novel_dir(nd)
+        if not nd:
+            print("错误: 无法定位小说根目录")
+            sys.exit(1)
+        w = write_chapter_openers(nd)
+        print(f"共刷新 {len(w)} 个 03_本章开篇状态.md")
+        return
 
     anchor = os.path.abspath(args.volume_dir or args.at_chapter)
     novel_dir = os.path.abspath(args.novel_dir) if args.novel_dir else st.find_novel_dir(anchor)

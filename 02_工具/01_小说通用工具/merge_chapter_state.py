@@ -190,6 +190,14 @@ def main():
                                    tool="merge_chapter_state.py"):
         print(f"  {line}")
 
+    # 刷新逐章开篇状态派生视图（W4.1）
+    try:
+        from build_state_snapshot import write_chapter_openers
+        print("\n刷新逐章开篇状态 03_本章开篇状态.md ...")
+        write_chapter_openers(novel_dir)
+    except Exception as e:  # noqa: BLE001 —— 开篇状态刷新失败不应中断合并
+        print(f"  警告: 逐章开篇状态刷新失败（{e}）；请手动跑 build_state_snapshot.py --write-chapter-openers")
+
     print("\n合并完成。请运行 audit_consistency.py 复查一致性。")
 
 
