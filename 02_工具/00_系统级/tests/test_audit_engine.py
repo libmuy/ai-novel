@@ -257,6 +257,63 @@ class TestAuditEngine(unittest.TestCase):
         ])
         self.assertNotIn("RELATION001", found)
 
+    # ---- plan_beat：卷大纲章节归属单一权威 ----
+
+    def _run_plan_beat(self, body: str):
+        from audit.rules.plan_beat import PlanBeatRule
+        vol = self.novel_dir / "03_规划" / "01_第01部" / "01_卷01" / "规划_卷01.md"
+        vol.parent.mkdir(parents=True, exist_ok=True)
+        vol.write_text(body, encoding="utf-8")
+        return {f.code: f for f in PlanBeatRule().run(AuditContext(self.novel_dir))}
+
+    _BEAT = (
+        "## 【章节节拍表】\n\n"
+        "| 章节 | 一句话剧情摘要 | 必用模板 | 核心事件类型 | 钩子类型 |\n"
+        "|---|---|---|---|---|\n"
+        "| 第01章 | @主角 被 @人物.[马铁秤] 克扣工钱 | 05_开篇三章指南 | 入戏/危机 | 重钩 |\n"
+        "| 第04章 | @主角 借古玉入道，@人物.[周莽] 赠 @资源.[灵心草] | 09_主角突破卡模板 | 突破/晋升 | 轻钩 |\n"
+        "| 第10章 | @主角 随 @人物.[周莽] 发现古符文矿道（埋 @伏笔.FH-003） | 00_通用写作规则 | 危机/冲突 | 重钩 |\n"
+    )
+
+    def test_plan_beat_chapter_column_flagged(self):
+        body = self._BEAT + (
+            "\n## 【角色与关系】\n\n### 本卷新出场配角\n\n"
+            "| 角色 | 关联卡 | 出场章节 | 职能 |\n|---|---|---|---|\n"
+            "| @人物.[周莽] | 07_人物_周莽.md | 第04章 | 师父 |\n"
+        )
+        found = self._run_plan_beat(body)
+        self.assertIn("PLAN_BEAT001", found)
+        self.assertIn("出场章节", "".join(found["PLAN_BEAT001"].locations))
+
+    def test_plan_beat_banned_index_section(self):
+        body = self._BEAT + "\n## 【出场对象ID清单】（供任务11检索）\n\n| ID | 出场章节 |\n|---|---|\n| @主角 | 全卷 |\n"
+        found = self._run_plan_beat(body)
+        self.assertIn("PLAN_BEAT001", found)
+
+    def test_plan_beat_fh_not_in_summary(self):
+        # FH-068 埋设标第01章，但第01章摘要没 @引用 FH-068
+        body = self._BEAT + (
+            "\n## 【资源与伏笔规划】\n\n### 本卷埋设伏笔列表\n\n"
+            "| 伏笔ID | 名称 | 类型 | 埋设章节 | 回收 |\n|---|---|---|---|---|\n"
+            "| @伏笔.FH-068 | 活矿邪法 | 中 | 第01章（轻埋） | 卷3 |\n"
+        )
+        found = self._run_plan_beat(body)
+        self.assertIn("PLAN_BEAT002", found)
+        self.assertIn("FH-068", "".join(found["PLAN_BEAT002"].locations))
+
+    def test_plan_beat_clean(self):
+        # 埋设伏笔章节与摘要一致；无章节列
+        body = self._BEAT + (
+            "\n## 【资源与伏笔规划】\n\n### 本卷埋设伏笔列表\n\n"
+            "| 伏笔ID | 名称 | 类型 | 埋设章节 | 回收 |\n|---|---|---|---|---|\n"
+            "| @伏笔.FH-003 | 深矿古修之迹 | 中 | 第10章 | 卷4 |\n"
+            "\n### 本卷新出场配角\n\n| 角色 | 关联卡 | 职能/定位 |\n|---|---|---|\n"
+            "| @人物.[周莽] | 07_人物_周莽.md | 师父，老矿头 |\n"
+        )
+        found = self._run_plan_beat(body)
+        self.assertNotIn("PLAN_BEAT001", found)
+        self.assertNotIn("PLAN_BEAT002", found)
+
     # ---- STATE015 回归：drift 检查必须带描述合并缓存 ----
 
     def test_state_drift_uses_merge_cache(self):

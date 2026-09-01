@@ -29,6 +29,7 @@ from audit.rules.todo import TodoRule
 from audit.rules.foreshadow import ForeshadowRule
 from audit.rules.state_registry import StateRegistryRule
 from audit.rules.relation import RelationRule
+from audit.rules.plan_beat import PlanBeatRule
 
 
 def load_field_vocab(novel_dir: Path):
@@ -61,6 +62,7 @@ def get_default_engine(novel_dir: Path) -> AuditEngine:
     engine.register_rule(ForeshadowRule())
     engine.register_rule(StateRegistryRule())
     engine.register_rule(RelationRule())
+    engine.register_rule(PlanBeatRule())
     return engine
 
 
