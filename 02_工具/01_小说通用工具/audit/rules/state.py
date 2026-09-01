@@ -322,7 +322,8 @@ class StateRule(AuditRule):
             paths = all_paths if folded not in names else all_paths[: names.index(folded) + 1]
 
         try:
-            expected, _wb = stmod.fold_all(str(baseline), paths, resolver=None)
+            cache = stmod.load_merge_cache(str(novel_dir))
+            expected, _wb = stmod.fold_all(str(baseline), paths, cache=cache, resolver=None)
         except stmod.StateMergeError as e:
             findings.append(Finding(
                 severity=Severity.ERROR, rule=self.name, code="STATE015",

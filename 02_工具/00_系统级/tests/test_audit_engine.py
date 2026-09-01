@@ -257,6 +257,43 @@ class TestAuditEngine(unittest.TestCase):
         ])
         self.assertNotIn("RELATION001", found)
 
+    # ---- STATE015 回归：drift 检查必须带描述合并缓存 ----
+
+    def test_state_drift_uses_merge_cache(self):
+        """已并入含描述变更的章后，_check_state_drift 用缓存折叠——不得报 STATE015。"""
+        import sys as _sys
+        _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        import state_tree as st
+        from audit.rules.state import StateRule
+
+        nd = self.novel_dir
+        (nd / "05_工作区/00_全局/00_基线状态/01_角色").mkdir(parents=True, exist_ok=True)
+        (nd / "05_工作区/00_全局/00_基线状态/01_角色/01_角色_苏砚.md").write_text(
+            "# 全局状态 · 角色.苏砚\n\n> 对象ID: 角色.苏砚\n\n"
+            "| 对象ID | 字段 | 类型 | 值 |\n| --- | --- | --- | --- |\n"
+            "| 角色.苏砚 | 当前心境 | 描述 | 平静 |\n", encoding="utf-8")
+        ch = nd / "05_工作区/01_第01部/01_卷01/章0001"
+        _write_changelog(str(ch / "04_本章状态履历.md"),
+                         [["角色.苏砚", "当前心境", "描述", "警惕而克制", "0001", "2026-01-01", "修改"]])
+        # 描述合并缓存（模拟 merge_chapter_state.py --merge-pending 已写）
+        merged = "平静，但已生出警惕而克制之心"
+        st.append_merge_cache(str(nd), [{
+            "对象": "角色.苏砚", "字段": "当前心境",
+            "旧值sha": st.value_fingerprint("平静"),
+            "新值sha": st.value_fingerprint("警惕而克制"),
+            "合并文本": merged, "章": "01_第01部/01_卷01/章0001", "时间": "2026-01-01",
+        }])
+        # 写 01_最新状态（== 基线 ⊕ 履历，用缓存）+ manifest 折叠至章0001
+        cache = st.load_merge_cache(str(nd))
+        recs, _ = st.fold_all(str(nd / "05_工作区/00_全局/00_基线状态"),
+                              st.iter_workspace_changelogs(str(nd)), cache=cache, resolver=None)
+        st.write_state_tree(str(nd / "05_工作区/00_全局/01_最新状态"), recs,
+                            folded_chapter="01_第01部/01_卷01/章0001")
+
+        codes = {f.code for f in StateRule().run(AuditContext(nd))}
+        self.assertNotIn("STATE015", codes)
+        self.assertNotIn("STATE016", codes)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -11,15 +11,17 @@
 配置
 ----
 - `02_工具/00_系统级/llm.config.toml`（提交入库，无密钥）：
-      base_url = "https://api.openai.com/v1"
-      model = "gpt-4o-mini"
+      base_url = "http://ai-station.local:8080/v1"   # 或 https://api.openai.com/v1
+      model = "..."
+      api_key_required = false   # 本地无鉴权端点；默认 true
       api_key_env = "OPENAI_API_KEY"
-      timeout = 60
+      timeout = 120
       max_tokens = 4096
       temperature = 0.2
 - `02_工具/00_系统级/llm.secret.toml`（可选，已 gitignore）：
       api_key = "sk-..."
 - 密钥优先级：环境变量（api_key_env 指定名）> secret 文件 api_key > 无。
+  api_key_required = false 时不发 Authorization 头、缺 key 也不报错。
 """
 
 import json
@@ -48,16 +50,24 @@ class LlmConfig:
     timeout: int = 60
     max_tokens: int = 4096
     temperature: float = 0.2
+    api_key_required: bool = True  # 本地无鉴权端点（llama.cpp 等）设 false
 
 
-def load_llm_config(tools_dir):
-    """从 tools_dir 加载 llm.config.toml（+ 可选 llm.secret.toml），解析出 LlmConfig。"""
-    cfg_path = os.path.join(tools_dir, CONFIG_FILENAME)
-    if not os.path.exists(cfg_path):
+def load_llm_config(tools_dir=None):
+    """加载 llm.config.toml（+ 可选 llm.secret.toml），解析出 LlmConfig。
+    先查 tools_dir，再退回本模块所在目录（02_工具/00_系统级/，配置与 _llm.py 同放）。"""
+    own_dir = os.path.dirname(os.path.abspath(__file__))
+    candidates = []
+    if tools_dir:
+        candidates.append(os.path.join(tools_dir, CONFIG_FILENAME))
+    candidates.append(os.path.join(own_dir, CONFIG_FILENAME))
+    cfg_path = next((p for p in candidates if os.path.exists(p)), None)
+    if cfg_path is None:
         raise LlmError(
-            f"未找到 {cfg_path}。描述类字段的智能合并需要该配置文件；"
-            f"可从 {CONFIG_FILENAME} 模板复制并填 base_url / model / api_key_env。"
+            f"未找到 {CONFIG_FILENAME}（查过 {', '.join(candidates)}）。"
+            f"描述类字段的智能合并需要该配置文件；填 base_url / model / api_key_env。"
         )
+    tools_dir = os.path.dirname(cfg_path)  # secret 文件与 config 同目录
     with open(cfg_path, "rb") as f:
         data = tomllib.load(f)
 
@@ -83,15 +93,17 @@ def load_llm_config(tools_dir):
         timeout=int(data.get("timeout", 60)),
         max_tokens=int(data.get("max_tokens", 4096)),
         temperature=float(data.get("temperature", 0.2)),
+        api_key_required=bool(data.get("api_key_required", True)),
     )
 
 
 def chat(cfg, system, user):
     """调用 OpenAI 兼容 /chat/completions，返回 assistant 文本内容。失败抛 LlmError。"""
-    if not cfg.api_key:
+    if cfg.api_key_required and not cfg.api_key:
         raise LlmError(
             f"缺少 API key：请设置环境变量 {cfg.api_key_env}，"
             f"或在 02_工具/{SECRET_FILENAME} 写 api_key。"
+            f"（本地无鉴权端点可在 {CONFIG_FILENAME} 设 api_key_required = false）"
         )
 
     body = json.dumps({
@@ -105,13 +117,14 @@ def chat(cfg, system, user):
         "response_format": {"type": "json_object"},
     }).encode("utf-8")
 
+    headers = {"Content-Type": "application/json"}
+    if cfg.api_key:
+        headers["Authorization"] = f"Bearer {cfg.api_key}"
+
     req = urllib.request.Request(
         f"{cfg.base_url}/chat/completions",
         data=body,
-        headers={
-            "Authorization": f"Bearer {cfg.api_key}",
-            "Content-Type": "application/json",
-        },
+        headers=headers,
         method="POST",
     )
 
@@ -146,12 +159,23 @@ _SYSTEM_PROMPT = (
 )
 
 
+import re as _re
+
+_THINK_RE = _re.compile(r"<think>.*?</think>", _re.S)
+
+
 def _strip_json_fence(text):
     t = text.strip()
+    # 推理模型（Qwen3 等）可能前置 <think>...</think>
+    t = _THINK_RE.sub("", t).strip()
     if t.startswith("```"):
         t = t.split("\n", 1)[1] if "\n" in t else t[3:]
         if t.rstrip().endswith("```"):
             t = t.rstrip()[:-3]
+    t = t.strip()
+    # 兜底：若仍有包裹文字，截取第一个 { 到最后一个 }
+    if not t.startswith("{") and "{" in t and "}" in t:
+        t = t[t.index("{"): t.rindex("}") + 1]
     return t.strip()
 
 

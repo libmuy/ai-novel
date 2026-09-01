@@ -116,6 +116,6 @@ LLM 客户端在 `02_工具/00_系统级/_llm.py`。
 | `build_baseline.py` | 只读卡片、不调 LLM、**不写基线**。`<小说目录>` 扫全部人物/势力卡的「## 动态字段清单」已填初值 → 生成**基线候选**树到 `05_工作区/00_全局/00_基线候选/`，并报告哪些字段初值待用户确认、哪些卡缺清单。Agent 按技能 `08_基线状态初始化.md`【基线范围规则】筛选后提升为 `00_基线状态/`。`--no-write` 只出报告，`--format json`。 |
 | `migrate_state_layout.py` | 一次性：把旧的扁平 `05_工作区/00_全局/01_最新状态/0N_*状态.md` + 逐章 `03` 迁移为每对象一文件的树 + 建冻结基线。只改结构不改内容。 |
 | `new_novel.py` | `<小说名>` 脚手架新小说（算编号、拷骨架、建软链、填占位符）。无 LLM。见技能 `07_新建小说.md`。 |
-| `state_tree.py` / `_llm.py` / `llm.config.toml` | 共享库 / LLM 客户端（OpenAI 兼容 `/chat/completions`）/ 端点配置（密钥走环境变量或 gitignore 的 `llm.secret.toml`）。 |
+| `state_tree.py` / `_llm.py` / `llm.config.toml` | 共享库 / LLM 客户端（OpenAI 兼容 `/chat/completions`）/ 端点配置。当前指向本地 llama.cpp（`http://ai-station.local:8080/v1`，`api_key_required = false`，无密钥）；需鉴权的端点走环境变量或 gitignore 的 `llm.secret.toml`。 |
 
 > 若将某本小说目录作为工作区根目录，以该小说目录中的 `AGENTS.md` 和 `00_通用模板/` 软链接为准。

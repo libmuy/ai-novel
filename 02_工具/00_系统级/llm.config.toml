@@ -3,17 +3,20 @@
 # 用途：merge_chapter_state.py 在某章改动描述类字段时，调用一次大模型把
 #       旧描述 + 新描述合并成不丢信息的一段文本（运算-数值/枚举/列表 仍纯 Python）。
 #
-# 密钥不写在本文件（本文件入库）。二选一：
+# 端点须为 OpenAI 兼容的 /chat/completions（llama.cpp / DeepSeek / Moonshot /
+# OpenAI / 多数网关 / Anthropic 的 OpenAI 兼容端点均可）。
+#
+# 需要密钥的端点（api_key_required = true，默认）：密钥不写在本文件（本文件入库），二选一：
 #   1. 环境变量：export <api_key_env 指定的变量名>=sk-xxx
 #   2. 同目录 llm.secret.toml（已 gitignore）：api_key = "sk-xxx"
-# 优先级：环境变量 > llm.secret.toml
-#
-# 端点须为 OpenAI 兼容的 /chat/completions（DeepSeek / Moonshot / OpenAI /
-# 多数网关 / Anthropic 的 OpenAI 兼容端点均可）。
+#   优先级：环境变量 > llm.secret.toml
+# 本地无鉴权端点（llama.cpp server 等）：设 api_key_required = false，不发 Authorization 头。
 
-base_url = "https://api.openai.com/v1"
-model = "gpt-4o-mini"
+# —— 当前：本地 llama.cpp server（Qwen3 27B），无需密钥 ——
+base_url = "http://ai-station.local:8080/v1"
+model = "/srv/unsafe/models/llm/unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-Q4_K_M.gguf"
+api_key_required = false
 api_key_env = "OPENAI_API_KEY"
-timeout = 60
+timeout = 120
 max_tokens = 4096
 temperature = 0.2
