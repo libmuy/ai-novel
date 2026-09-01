@@ -219,11 +219,19 @@ class StateRule(AuditRule):
             if not state_dir.exists():
                 continue
             for fi in context.files:
-                if fi.relative_path.startswith(state_dir_rel):
-                    try:
-                        stmod.parse_md_table(str(fi.file_path), strict=True)
-                    except stmod.StateMergeError as e:
-                        unparseable.append(f"{fi.relative_path}: {e}")
+                if not fi.relative_path.startswith(state_dir_rel):
+                    continue
+                parts = fi.relative_path.split("/")
+                base = parts[-1]
+                parent = parts[-2] if len(parts) >= 2 else ""
+                # 跳过说明/manifest 与 NN_类目.md 索引（非状态表，列数本就不是 4/7）——
+                # 与 state_tree.load_state_tree 的跳过规则保持一致
+                if base.startswith("00_") or base == f"{parent}.md":
+                    continue
+                try:
+                    stmod.parse_md_table(str(fi.file_path), strict=True)
+                except stmod.StateMergeError as e:
+                    unparseable.append(f"{fi.relative_path}: {e}")
         if unparseable:
             findings.append(Finding(
                 severity=Severity.ERROR, rule=self.name, code="STATE011",
