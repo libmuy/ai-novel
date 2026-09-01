@@ -12,3 +12,6 @@ llm.secret.toml
 01_小说数据/00_苍玄/00_通用模板.bak/
 .obsidian/
 TMP/
+
+# 状态脚本目录级备份
+**/01_最新状态.bak/
