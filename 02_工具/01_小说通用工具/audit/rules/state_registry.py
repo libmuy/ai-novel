@@ -162,6 +162,13 @@ class StateRegistryRule(AuditRule):
                 ok = name in item_names
             elif prefix == "财务":
                 ok = name in fin_names
+            elif prefix == "关系":
+                # 关系对象：两端都必须是已注册对象（格式错误由 relation 规则的 RELATION001 报）
+                if name.count("&") == 1:
+                    ends = [e.strip() for e in name.split("&")]
+                    ok = all(e in fin_names for e in ends if e)
+                else:
+                    continue  # 格式非法，交给 RELATION001
             else:
                 continue  # 世界/其他前缀：交给 state.py 的 STATE009
 

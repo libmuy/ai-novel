@@ -71,7 +71,7 @@ def write_chapter_openers(novel_dir, *, verbose=True):
             shown, missing = records, None
         else:
             present = {r["object_id"] for r in records}
-            shown = [r for r in records if r["object_id"] in cast]
+            shown = [r for r in records if st.cast_contains(cast, r["object_id"])]
             missing = cast - present
         out = os.path.join(chap_dir, st.CHAPTER_OPENER_FILENAME)
         st._atomic_write(out, st.render_chapter_opener(shown, chap_name, cast, missing))

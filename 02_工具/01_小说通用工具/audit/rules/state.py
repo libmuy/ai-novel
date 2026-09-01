@@ -14,7 +14,7 @@ from ..context import AuditContext
 VALID_MERGE_TYPES = {"运算-数值", "运算-枚举", "运算-列表", "描述"}
 STATE_OBJECT_PREFIX_CATEGORY = {
     "角色": "01_角色", "物品": "02_物品", "势力": "03_势力",
-    "财务": "04_财务", "世界": "05_世界",
+    "财务": "04_财务", "世界": "05_世界", "关系": "06_关系",
 }
 CHAR_DEAD_STATES = {"死亡", "退场"}
 ITEM_DEAD_STATES = {"损毁", "易主"}
@@ -158,7 +158,7 @@ class StateRule(AuditRule):
                 continue  # 折叠不了的问题由 STATE015 报
             cast = stmod.parse_chapter_cast(stmod.plan_path_for_chapter(str(chap_dir), str(novel_dir)), prot)
             if cast is not None:
-                expected = [r for r in expected if r["object_id"] in cast]
+                expected = [r for r in expected if stmod.cast_contains(cast, r["object_id"])]
             exp_map = {(r["object_id"], r["field"]): r["value"] for r in expected}
             got_map = {(r["object_id"], r["field"]): r["value"]
                        for r in stmod.parse_md_table(str(opener_path), strict=False)}
@@ -382,14 +382,12 @@ class StateRule(AuditRule):
                 if oid in item_term:
                     term_state, ch = item_term[oid]
                     item_conflicts.append(f"{rel}: {oid} 已于「{ch}」标记「{term_state}」，仍变更字段「{field}」")
-                if field == "持有物品" and str(r.get("type", "")).startswith("运算-列表"):
-                    for op in r["value"].split(","):
-                        op = op.strip()
-                        if op.startswith("+"):
-                            key = f"物品.{op[1:].strip()}"
-                            if key in item_term:
-                                term_state, ch = item_term[key]
-                                item_conflicts.append(f"{rel}: {oid} 重新持有「{op[1:].strip()}」，但该物品已于「{ch}」标记「{term_state}」")
+                # 持有权模型：`物品.Y 的「持有者」` 指向已死亡/退场的角色 -> 冲突
+                if oid.startswith("物品.") and field == "持有者":
+                    hm = re.match(r"@?角色\.\[?([^\]\s]+?)\]?$", str(r.get("value", "")).strip())
+                    if hm and f"角色.{hm.group(1)}" in dead:
+                        char_conflicts.append(
+                            f"{rel}: {oid} 的持有者被设为「角色.{hm.group(1)}」，但该角色已于「{dead['角色.' + hm.group(1)]}」标记终态")
 
             try:
                 curr, _ = stmod.merge_states(curr, cl)

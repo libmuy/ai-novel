@@ -326,5 +326,52 @@ class TestChapterOpeners(unittest.TestCase):
             self.assertEqual(cast, {"角色.苏砚", "势力.黑石会"})
 
 
+class TestRelationId(unittest.TestCase):
+    """W5：关系对象 ID `关系.<甲>&<乙>` 规范。"""
+
+    def test_normalize_sorts_endpoints(self):
+        self.assertEqual(st.normalize_relation_id("关系.苏砚&柳禾"), "关系.柳禾&苏砚")
+        self.assertEqual(st.normalize_relation_id("关系.柳禾&苏砚"), "关系.柳禾&苏砚")
+        # 裸形式（无前缀）也接受
+        self.assertEqual(st.normalize_relation_id("苏砚&柳禾"), "关系.柳禾&苏砚")
+
+    def test_split_rejects_malformed(self):
+        for bad in ("关系.甲乙", "关系.甲&乙&丙", "关系.&乙", "关系.甲&", "关系.甲&甲"):
+            with self.assertRaises(st.RelationIdError):
+                st.split_relation_id(bad)
+
+    def test_split_ok(self):
+        self.assertEqual(st.split_relation_id("关系.柳禾&苏砚"), ("柳禾", "苏砚"))
+
+    def test_cast_contains_relation_one_end(self):
+        cast = {"角色.苏砚", "势力.黑石会"}
+        # 一端在场即覆盖
+        self.assertTrue(st.cast_contains(cast, "关系.柳禾&苏砚"))
+        # 两端都不在场
+        self.assertFalse(st.cast_contains(cast, "关系.周莽&柳禾"))
+        # 普通对象仍是直接 in
+        self.assertTrue(st.cast_contains(cast, "角色.苏砚"))
+        self.assertFalse(st.cast_contains(cast, "角色.柳禾"))
+
+
+class TestHoldingsReverseIndex(unittest.TestCase):
+    """W5：write_state_tree 生成 00_持有物品反查.md 派生视图（manifest=True 时）。"""
+
+    def test_reverse_index_generated(self):
+        with tempfile.TemporaryDirectory() as td:
+            latest = os.path.join(td, "01_最新状态")
+            st.write_state_tree(latest, [
+                {"object_id": "物品.矿钉", "field": "持有者", "type": "运算-枚举", "value": "@角色.[苏砚]"},
+                {"object_id": "物品.古玉", "field": "持有者", "type": "运算-枚举", "value": "角色.苏砚"},
+                {"object_id": "物品.骨傀", "field": "持有者", "type": "运算-枚举", "value": "无人"},
+            ], manifest=True)
+            rev = open(os.path.join(latest, st.HOLDINGS_REVERSE_FILENAME), encoding="utf-8").read()
+            self.assertIn("| 苏砚 | 古玉、矿钉 |", rev)
+            self.assertIn("无人持有", rev)
+            # 派生文件不被 load_state_tree 当成状态
+            recs = st.load_state_tree(latest)
+            self.assertTrue(all(not r["object_id"].startswith("持有者") for r in recs))
+
+
 if __name__ == "__main__":
     unittest.main()

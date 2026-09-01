@@ -218,6 +218,45 @@ class TestAuditEngine(unittest.TestCase):
         self.assertNotIn("STATE022", found)
         self.assertNotIn("STATE023", found)
 
+    # ---- W5 relation ----
+
+    def _run_relation_rule(self, changelog_rows):
+        from audit.rules.relation import RelationRule
+        card_dir = self.novel_dir / "02_数据库" / "07_人物"
+        card_dir.mkdir(parents=True, exist_ok=True)
+        for name in ("柳禾", "苏砚"):
+            (card_dir / f"07_人物_{name}.md").write_text(f"# 人物卡 · {name}\n", encoding="utf-8")
+        ch_dir = self.novel_dir / "05_工作区" / "01_第01部" / "01_卷01" / "章0001"
+        _write_changelog(str(ch_dir / "04_本章状态履历.md"), changelog_rows)
+        context = AuditContext(self.novel_dir)
+        return {f.code: f for f in RelationRule().run(context)}
+
+    def test_relation_id_unsorted_flagged(self):
+        found = self._run_relation_rule([
+            ["关系.苏砚&柳禾", "关系性质", "运算-枚举", "血亲·母子"],
+        ])
+        self.assertIn("RELATION001", found)
+        self.assertIn("关系.柳禾&苏砚", "".join(found["RELATION001"].locations))
+
+    def test_relation_id_two_seps_flagged(self):
+        found = self._run_relation_rule([
+            ["关系.甲&乙&丙", "关系性质", "运算-枚举", "结盟"],
+        ])
+        self.assertIn("RELATION001", found)
+
+    def test_relation_id_unregistered_end_flagged(self):
+        found = self._run_relation_rule([
+            ["关系.张三&苏砚", "关系性质", "运算-枚举", "敌对"],
+        ])
+        self.assertIn("RELATION001", found)
+
+    def test_relation_id_clean(self):
+        found = self._run_relation_rule([
+            ["关系.柳禾&苏砚", "关系性质", "运算-枚举", "血亲·母子"],
+            ["关系.柳禾&苏砚", "亲疏", "运算-枚举", "至亲"],
+        ])
+        self.assertNotIn("RELATION001", found)
+
 
 if __name__ == "__main__":
     unittest.main()

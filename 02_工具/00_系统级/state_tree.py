@@ -64,13 +64,67 @@ CATEGORY_BY_PREFIX = {
     "势力": "03_势力",
     "财务": "04_财务",
     "世界": "05_世界",
+    "关系": "06_关系",
 }
 OTHER_CATEGORY = "99_其他"
-CATEGORY_ORDER = ["01_角色", "02_物品", "03_势力", "04_财务", "05_世界", OTHER_CATEGORY]
+CATEGORY_ORDER = ["01_角色", "02_物品", "03_势力", "04_财务", "05_世界", "06_关系", OTHER_CATEGORY]
 CATEGORY_LABELS = {
     "01_角色": "角色", "02_物品": "物品", "03_势力": "势力",
-    "04_财务": "财务", "05_世界": "世界", OTHER_CATEGORY: "其他",
+    "04_财务": "财务", "05_世界": "世界", "06_关系": "关系", OTHER_CATEGORY: "其他",
 }
+
+# 对称关系一等对象 `关系.<甲>&<乙>` 的分隔符。必须是 ASCII `&`：
+# 文件系统安全、Markdown 无义、不在 _UNSAFE_NAME_CHARS 里、不与运算-列表语法
+# （+ - ,）冲突、不与文件名碰撞后缀（~）冲突、不与表格分隔符（| 及会被 NFKC
+# 折成 | 的全角 ｜）冲突。两端名字按 Unicode 码位排序后拼接——排序保证同一对
+# 关系物理上只有一个文件，双边不一致从结构上不可能。
+RELATION_SEP = "&"
+RELATION_PREFIX = "关系"
+
+
+class RelationIdError(ValueError):
+    """关系对象 ID 不符合 `关系.<甲>&<乙>`（恰一个 &、两端非空、已按 Unicode 序）规范。"""
+    pass
+
+
+def split_relation_id(object_id):
+    """`关系.柳禾&苏砚` -> ('柳禾', '苏砚')。不合规抛 RelationIdError。
+    两端顺序按输入原样返回，不做排序（排序检查交给 normalize_relation_id 比对）。"""
+    if "." not in object_id:
+        raise RelationIdError(f"{object_id}: 缺少 `关系.` 前缀")
+    prefix, rest = object_id.split(".", 1)
+    if prefix.strip() != RELATION_PREFIX:
+        raise RelationIdError(f"{object_id}: 前缀应为「{RELATION_PREFIX}」")
+    if rest.count(RELATION_SEP) != 1:
+        raise RelationIdError(
+            f"{object_id}: 关系 ID 必须恰好含一个 ASCII `{RELATION_SEP}`（当前 {rest.count(RELATION_SEP)} 个）")
+    a, b = (s.strip() for s in rest.split(RELATION_SEP))
+    if not a or not b:
+        raise RelationIdError(f"{object_id}: `{RELATION_SEP}` 两端都不能为空")
+    if a == b:
+        raise RelationIdError(f"{object_id}: 关系两端不能是同一对象")
+    return a, b
+
+
+def normalize_relation_id(object_id):
+    """把关系对象 ID 规范化：两端按 Unicode 码位排序、`关系.<小>&<大>`。
+    输入不含 `关系.` 前缀时按裸的 `甲&乙` 处理。用于 audit 报错时给出规范形式。"""
+    body = object_id.split(".", 1)[1] if object_id.startswith(RELATION_PREFIX + ".") else object_id
+    a, b = split_relation_id(RELATION_PREFIX + "." + body)
+    lo, hi = sorted((a, b))
+    return f"{RELATION_PREFIX}.{lo}{RELATION_SEP}{hi}"
+
+
+def relation_endpoints_as_object_ids(object_id, char_names, fac_names):
+    """关系两端 -> 状态对象 ID 列表。端名在人物卡集里 -> `角色.X`，在势力卡集里 -> `势力.X`，
+    都不在则原样返回 `角色.X`（让 state_registry 的存在性检查去报错）。"""
+    out = []
+    for end in split_relation_id(object_id):
+        if end in fac_names and end not in char_names:
+            out.append(f"势力.{end}")
+        else:
+            out.append(f"角色.{end}")
+    return out
 
 OBJECT_NOTE = "> 由状态脚本自动写入，请勿手工编辑。"
 BASELINE_NOTE = "> 创世基线快照 · 只读不可变（写第 1 章前一次性生成）。"
@@ -468,8 +522,9 @@ def object_id_to_relpath(object_id):
 CHAPTER_OPENER_FILENAME = "03_本章开篇状态.md"
 
 # @引用前缀 -> 状态对象 ID 前缀
-_REF_PREFIX_TO_STATE = {"人物": "角色", "势力": "势力", "物品": "物品", "财务": "财务", "世界": "世界"}
-_CAST_CELL_RE = re.compile(r"@(主角|人物|势力|物品|财务|世界)(?:\.\[([^\]]+)\])?")
+_REF_PREFIX_TO_STATE = {"人物": "角色", "势力": "势力", "物品": "物品",
+                       "财务": "财务", "世界": "世界", "关系": "关系"}
+_CAST_CELL_RE = re.compile(r"@(主角|人物|势力|物品|财务|世界|关系)(?:\.\[([^\]]+)\])?")
 _CHAPTER_DIR_RE = re.compile(r"^(\d+_第\d+部)/(\d+_卷(\d+))/(章\d+)$")
 
 
@@ -526,9 +581,32 @@ def parse_chapter_cast(plan_path, protagonist_id=None):
         if not name:
             continue
         pref = _REF_PREFIX_TO_STATE.get(typ)
-        if pref:
+        if not pref:
+            continue
+        if pref == "关系":
+            try:
+                ids.add(normalize_relation_id(name.strip()))
+            except RelationIdError:
+                ids.add(f"关系.{name.strip()}")  # 交给 audit 报格式错
+        else:
             ids.add(f"{pref}.{name.strip()}")
     return ids or None
+
+
+def cast_contains(cast_ids, object_id):
+    """本章出场对象集 cast_ids 是否「覆盖」object_id。
+    - 普通对象：直接 in。
+    - 关系对象 `关系.甲&乙`：**至少一端**的对象 ID 在 cast_ids 内即算覆盖
+      （主角对不在场仇人的敌意同样影响本章行为——不是「两端都在」）。"""
+    if object_id in cast_ids:
+        return True
+    if object_id.startswith(RELATION_PREFIX + "."):
+        try:
+            a, b = split_relation_id(object_id)
+        except RelationIdError:
+            return False
+        return any(f"{p}.{e}" in cast_ids for e in (a, b) for p in ("角色", "势力"))
+    return False
 
 
 def render_chapter_opener(records, chap_name, cast_ids=None, missing_ids=None):
@@ -734,6 +812,46 @@ def render_manifest(folded_chapter, tool, n_objects, n_records):
     ])
 
 
+HOLDINGS_REVERSE_FILENAME = "00_持有物品反查.md"
+_HOLDER_REF_RE = re.compile(r"@?(?:角色|势力)\.\[?([^\]\s]+?)\]?$")
+
+
+def render_holdings_reverse_index(records, folded_chapter=None):
+    """派生视图：扫全部 `物品.* 的「持有者」` 字段，反查出「某角色/势力 持有哪些物品」。
+    这是唯一权威 `物品.X 的「持有者」` 的只读反向索引——**不是权威数据**。"""
+    holders = OrderedDict()   # holder_display -> [item_name, ...]
+    unowned = []
+    for r in records:
+        oid = r.get("object_id", "")
+        if not oid.startswith("物品.") or r.get("field") != "持有者":
+            continue
+        item = oid.split(".", 1)[1]
+        raw = (r.get("value") or "").strip()
+        m = _HOLDER_REF_RE.match(raw)
+        if raw in ("", "无", "无人", "-", "—"):
+            unowned.append(item)
+        elif m:
+            holders.setdefault(m.group(1), []).append(item)
+        else:
+            holders.setdefault(raw, []).append(item)
+    lines = [
+        "# 持有物品 · 反查视图",
+        "",
+        "> 派生视图 · 由状态脚本从 `物品.* 的「持有者」` 字段反查生成 · **禁止手工编辑、非权威**。",
+        "> 权威数据 = 各 `物品.X` 对象文件的「持有者」字段；此处仅供「某人身上有哪些物品」查阅。",
+        f"> 折叠至章: {folded_chapter or NONE_MARKER}",
+        "",
+        "| 持有者 | 持有物品 |",
+        "| --- | --- |",
+    ]
+    for holder in sorted(holders):
+        lines.append(f"| {holder} | {'、'.join(sorted(holders[holder]))} |")
+    if unowned:
+        lines.append(f"| （无主 / 无人持有） | {'、'.join(sorted(unowned))} |")
+    lines.append("")
+    return "\n".join(lines)
+
+
 def parse_manifest_folded_chapter(state_dir):
     """读 00_同步状态.md 的「折叠至章」；无文件或无该行返回 None。"""
     path = os.path.join(state_dir, MANIFEST_FILENAME)
@@ -818,6 +936,11 @@ def write_state_tree(state_dir, records, *, folded_chapter=None, tool="state_tre
         _atomic_write(
             os.path.join(state_dir, MANIFEST_FILENAME),
             render_manifest(folded_chapter, tool, len(by_obj), len(records)),
+        )
+        # 持有物品反查（派生视图，仅在权威最新状态树生成）
+        _atomic_write(
+            os.path.join(state_dir, HOLDINGS_REVERSE_FILENAME),
+            render_holdings_reverse_index(records, folded_chapter),
         )
 
     logs.append(f"写入 {len(by_obj)} 个对象文件 / {len(records)} 条记录 -> {state_dir}")
