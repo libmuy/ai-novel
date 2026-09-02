@@ -13,7 +13,8 @@
 
 [critics]
 opencode = true
-opencode_models = ["nemotron-3-ultra-free", "mimo-v2.5-free"]
+# 按顺序依次尝试，第一个成功的即用。mimo-v2.5-free 反应快，放首位；nemotron 作回退。
+opencode_models = ["mimo-v2.5-free", "nemotron-3-ultra-free"]
 
 # "auto" = 先探测 ai-station.local:8080，活着才加入；true = 强制用（挂了则报错）；false = 不用
 local_qwen = "auto"
