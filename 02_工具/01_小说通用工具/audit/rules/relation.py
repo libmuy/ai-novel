@@ -20,13 +20,13 @@ from ..models import Finding, Severity
 from ..engine import AuditRule
 from ..context import AuditContext
 
-WHITELIST_REL = "05_工作区/00_全局/00_状态对象白名单.md"
+WHITELIST_REL = "05_工作区/02_状态/00_状态对象白名单.md"
 PROTAGONIST_NAME = "苏砚"
 STATE_TREES = [
-    "05_工作区/00_全局/00_基线状态",
-    "05_工作区/00_全局/01_最新状态",
+    "05_工作区/02_状态/00_基线状态",
+    "05_工作区/02_状态/01_最新状态",
 ]
-CHANGELOG_NAME = "04_本章状态履历.md"
+CHANGELOG_NAME = "01_状态履历.md"
 CHAR_TERMINAL = {"死亡", "退场"}
 REL_TERMINAL_OK = {"终结"}
 
@@ -137,7 +137,7 @@ class RelationRule(AuditRule):
 
         # ---- RELATION002：关系悬挂（一端已终态、关系未标终结）----
         if st is not None:
-            latest = novel_dir / "05_工作区" / "00_全局" / "01_最新状态"
+            latest = novel_dir / "05_工作区" / "02_状态" / "01_最新状态"
             if latest.exists():
                 recs = st.load_state_tree(str(latest))
                 dead_ends: Set[str] = set()

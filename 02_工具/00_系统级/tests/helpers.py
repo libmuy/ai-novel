@@ -12,12 +12,12 @@ NOVEL_STRUCTURE = {
     "01_设定": {},
     "02_数据库": {},
     "03_规划": {},
-    "05_工作区/00_全局/01_最新状态": {
+    "05_工作区/02_状态/01_最新状态": {
         "00_说明.md": "# 全局状态\n\n> 由状态脚本自动管理。\n",
-        "00_同步状态.md": "# 05_工作区/00_全局/01_最新状态 · 同步状态\n\n> 折叠至章: __none__\n",
+        "00_同步状态.md": "# 05_工作区/02_状态/01_最新状态 · 同步状态\n\n> 折叠至章: __none__\n",
     },
     "05_工作区": {
-        "00_全局": {
+        "02_状态": {
             "00_基线状态": {
                 "00_说明.md": "# 基线状态\n\n> 创世基线快照 · 只读不可变。\n",
             },
@@ -54,26 +54,28 @@ def make_novel(tmpdir, baseline_records=None, chapters=None):
     os.makedirs(novel, exist_ok=True)
 
     # 造顶层目录
-    for d in ("01_设定", "02_数据库", "03_规划", "05_工作区/00_全局/01_最新状态", "10_正文"):
+    for d in ("01_设定", "02_数据库", "03_规划", "05_工作区/02_状态/01_最新状态", "10_正文"):
         os.makedirs(os.path.join(novel, d), exist_ok=True)
 
     # 造 05_工作区
     ws = os.path.join(novel, "05_工作区")
-    os.makedirs(ws, exist_ok=True)
+    os.makedirs(os.path.join(ws, "00_提示词"), exist_ok=True)
+    os.makedirs(os.path.join(ws, "01_模型输出"), exist_ok=True)
+    os.makedirs(os.path.join(ws, "02_状态"), exist_ok=True)
 
     # 基线
-    bl = os.path.join(ws, "00_全局", "00_基线状态")
+    bl = os.path.join(ws, "02_状态", "00_基线状态")
     os.makedirs(bl, exist_ok=True)
     with open(os.path.join(bl, "00_说明.md"), "w", encoding="utf-8") as f:
         f.write("# 基线状态\n\n> 创世基线快照 · 只读不可变。\n")
 
-    # 05_工作区/00_全局/01_最新状态/
-    gs = os.path.join(novel, "05_工作区/00_全局/01_最新状态")
+    # 05_工作区/02_状态/01_最新状态/
+    gs = os.path.join(novel, "05_工作区/02_状态/01_最新状态")
     os.makedirs(gs, exist_ok=True)
     with open(os.path.join(gs, "00_说明.md"), "w", encoding="utf-8") as f:
         f.write("# 全局状态\n\n> 由状态脚本自动管理。\n")
     with open(os.path.join(gs, "00_同步状态.md"), "w", encoding="utf-8") as f:
-        f.write("# 05_工作区/00_全局/01_最新状态 · 同步状态\n\n> 折叠至章: __none__\n")
+        f.write("# 05_工作区/02_状态/01_最新状态 · 同步状态\n\n> 折叠至章: __none__\n")
 
     # 基线数据：按 object_id 分组写入类目目录
     if baseline_records:
@@ -82,9 +84,9 @@ def make_novel(tmpdir, baseline_records=None, chapters=None):
     # 各章履历
     if chapters:
         for chap_name, rows in chapters.items():
-            chap_dir = os.path.join(ws, chap_name)
+            chap_dir = os.path.join(ws, chap_name, "02_状态")
             os.makedirs(chap_dir, exist_ok=True)
-            cl_path = os.path.join(chap_dir, "04_本章状态履历.md")
+            cl_path = os.path.join(chap_dir, "01_状态履历.md")
             _write_changelog(cl_path, rows)
 
     return novel

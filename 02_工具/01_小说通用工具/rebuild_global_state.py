@@ -4,11 +4,11 @@
 """
 全局状态重折工具 (rebuild_global_state.py)
 
-用于「改早期章节」的场景：某一章的 `04_本章状态履历.md` 被人工改动后，
+用于「改早期章节」的场景：某一章的 `01_状态履历.md` 被人工改动后，
 `01_最新状态/` 需要重新计算。
 
-做法：从冻结基线 `05_工作区/00_全局/00_基线状态/` 出发，按章节路径顺序
-折叠**全部** `04_本章状态履历.md`，覆盖写入 `01_最新状态/`。
+做法：从冻结基线 `05_工作区/02_状态/00_基线状态/` 出发，按章节路径顺序
+折叠**全部** `01_状态履历.md`，覆盖写入 `01_最新状态/`。
 不需要「起始章」参数——基线不可变，全量重折即可。
 
 用法
@@ -109,7 +109,7 @@ def main():
     # 刷新逐章开篇状态派生视图（W4.1）
     try:
         from build_state_snapshot import write_chapter_openers
-        print("\n刷新逐章开篇状态 03_本章开篇状态.md ...")
+        print("\n刷新逐章开篇状态 00_开篇状态.md ...")
         write_chapter_openers(novel_dir)
     except Exception as e:  # noqa: BLE001 —— 开篇状态刷新失败不应中断重折
         print(f"  警告: 逐章开篇状态刷新失败（{e}）；请手动跑 build_state_snapshot.py --write-chapter-openers")

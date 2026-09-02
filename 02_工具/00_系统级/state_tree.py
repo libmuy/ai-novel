@@ -10,8 +10,8 @@ audit_consistency.py 共用。**纯 Python 标准库、无网络、无 LLM。**
 
 数据模型
 --------
-- 唯一权威状态存储 = 小说目录下 `05_工作区/00_全局/01_最新状态/`，按对象类别分子目录：
-    05_工作区/00_全局/01_最新状态/
+- 唯一权威状态存储 = 小说目录下 `05_工作区/02_状态/01_最新状态/`，按对象类别分子目录：
+    05_工作区/02_状态/01_最新状态/
       ├── 00_说明.md            手写
       ├── 00_同步状态.md         本模块写（manifest，非权威）
       ├── 01_角色/  01_角色.md（索引）  01_角色_<名>.md ...
@@ -20,9 +20,9 @@ audit_consistency.py 共用。**纯 Python 标准库、无网络、无 LLM。**
       ├── 04_财务/  ...
       ├── 05_世界/  ...
       └── 99_其他/  ...          前缀不属五大类的兜底
-- 冻结基线 = `05_工作区/00_全局/00_基线状态/`，布局同上，只读不可变。
-- `05_工作区/00_全局/01_最新状态/` == 基线 ⊕（按章节路径顺序折叠全部 `04_本章状态履历.md`）。
-- 每章目录只有 `04_本章状态履历.md`（7 列：前 4 列权威 + 章节号/变更时间/变更类型 元数据）。
+- 冻结基线 = `05_工作区/02_状态/00_基线状态/`，布局同上，只读不可变。
+- `05_工作区/02_状态/01_最新状态/` == 基线 ⊕（按章节路径顺序折叠全部 `01_状态履历.md`）。
+- 每章目录只有 `01_状态履历.md`（7 列：前 4 列权威 + 章节号/变更时间/变更类型 元数据）。
 """
 
 import os
@@ -38,14 +38,14 @@ from datetime import datetime, timezone
 # ---------------------------------------------------------------------------
 
 WORKSPACE_DIRNAME = "05_工作区"
-BASELINE_SUBPATH = os.path.join("05_工作区", "00_全局", "00_基线状态")
-LATEST_STATE_SUBPATH = os.path.join("05_工作区", "00_全局", "01_最新状态")
-CHANGELOG_FILENAME = "04_本章状态履历.md"
+BASELINE_SUBPATH = os.path.join("05_工作区", "02_状态", "00_基线状态")
+LATEST_STATE_SUBPATH = os.path.join("05_工作区", "02_状态", "01_最新状态")
+CHANGELOG_FILENAME = "01_状态履历.md"
 LEGACY_CHAPTER_STATE_FILENAME = "03_本章初始状态.md"
 MANIFEST_FILENAME = "00_同步状态.md"
 NONE_MARKER = "__none__"
 
-# 04_本章状态履历.md 在标准 4 列之后追加的元数据列（读入但不参与合并计算）
+# 01_状态履历.md 在标准 4 列之后追加的元数据列（读入但不参与合并计算）
 CHANGELOG_META_COLUMNS = ['章节号', '变更时间', '变更类型']
 
 # 运算-数值字段允许的「空值」写法，一律按 0 处理（不视为解析失败）
@@ -55,9 +55,9 @@ NUMERIC_EMPTY_VALUES = {'', '无', '空', '-', '—', '~', 'null', 'N/A', '/'}
 VALID_MERGE_TYPES = {"运算-数值", "运算-枚举", "运算-列表", "描述"}
 
 # 描述合并缓存
-MERGE_CACHE_FILENAME = "00_描述合并缓存.jsonl"
+MERGE_CACHE_FILENAME = "04_描述合并缓存.jsonl"
 
-# 对象 ID 前缀 -> 05_工作区/00_全局/01_最新状态/ 下的类目目录名
+# 对象 ID 前缀 -> 05_工作区/02_状态/01_最新状态/ 下的类目目录名
 CATEGORY_BY_PREFIX = {
     "角色": "01_角色",
     "物品": "02_物品",
@@ -519,13 +519,13 @@ def object_id_to_relpath(object_id):
 # 单章细纲「## 出场对象」<-> 状态对象 ID（供 build_state_snapshot / audit 共用）
 # ---------------------------------------------------------------------------
 
-CHAPTER_OPENER_FILENAME = "03_本章开篇状态.md"
+CHAPTER_OPENER_FILENAME = "00_开篇状态.md"
 
 # @引用前缀 -> 状态对象 ID 前缀
 _REF_PREFIX_TO_STATE = {"人物": "角色", "势力": "势力", "物品": "物品",
                        "财务": "财务", "世界": "世界", "关系": "关系"}
 _CAST_CELL_RE = re.compile(r"@(主角|人物|势力|物品|财务|世界|关系)(?:\.\[([^\]]+)\])?")
-_CHAPTER_DIR_RE = re.compile(r"^(\d+_第\d+部)/(\d+_卷(\d+))/(章\d+)$")
+_CHAPTER_DIR_RE = re.compile(r"^(\d+_第\d+部)/(\d+_卷(\d+))/(\d+_章\d+|章\d+)$")
 
 
 def protagonist_state_id(novel_dir):
@@ -541,16 +541,33 @@ def protagonist_state_id(novel_dir):
 
 
 def plan_path_for_chapter(chapter_dir, novel_dir):
-    """章目录 `05_工作区/01_第01部/01_卷01/章0001` -> 单章细纲
+    """章目录 `05_工作区/03_第01部/03_卷01/03_章0001` -> 单章细纲
     `03_规划/01_第01部/01_卷01/规划_卷01_章0001.md` 的绝对路径。不匹配返回 None。"""
+    chapter_dir_abs = os.path.abspath(chapter_dir)
+    if os.path.basename(chapter_dir_abs) == "02_状态":
+        chapter_dir_abs = os.path.dirname(chapter_dir_abs)
     ws = os.path.join(os.path.abspath(novel_dir), WORKSPACE_DIRNAME)
-    rel = os.path.relpath(os.path.abspath(chapter_dir), ws).replace(os.sep, "/")
+    rel = os.path.relpath(chapter_dir_abs, ws).replace(os.sep, "/")
     m = _CHAPTER_DIR_RE.match(rel)
     if not m:
         return None
-    part_dir, vol_dir, vol_num, chap = m.group(1), m.group(2), m.group(3), m.group(4)
-    return os.path.join(os.path.abspath(novel_dir), "03_规划", part_dir, vol_dir,
-                        f"规划_卷{vol_num}_{chap}.md")
+    part_dir, vol_dir, vol_num, chap_raw = m.group(1), m.group(2), m.group(3), m.group(4)
+    chap = chap_raw.split("_")[-1] if "_" in chap_raw else chap_raw
+    part_clean = re.sub(r"^\d+_", "", part_dir)
+    vol_clean = re.sub(r"^\d+_", "", vol_dir)
+    # 尝试匹配 03_规划 下的目录
+    plan_root = os.path.join(os.path.abspath(novel_dir), "03_规划")
+    if os.path.isdir(plan_root):
+        for p_entry in os.listdir(plan_root):
+            if p_entry == part_dir or p_entry == part_clean or re.sub(r"^\d+_", "", p_entry) == part_clean:
+                p_path = os.path.join(plan_root, p_entry)
+                if os.path.isdir(p_path):
+                    for v_entry in os.listdir(p_path):
+                        if v_entry == vol_dir or v_entry == vol_clean or re.sub(r"^\d+_", "", v_entry) == vol_clean:
+                            candidate = os.path.join(p_path, v_entry, f"规划_卷{vol_num}_{chap}.md")
+                            if os.path.exists(candidate):
+                                return candidate
+    return os.path.join(plan_root, part_dir, vol_dir, f"规划_卷{vol_num}_{chap}.md")
 
 
 def parse_chapter_cast(plan_path, protagonist_id=None):
@@ -610,12 +627,12 @@ def cast_contains(cast_ids, object_id):
 
 
 def render_chapter_opener(records, chap_name, cast_ids=None, missing_ids=None):
-    """渲染 03_本章开篇状态.md（派生视图 · 禁止手工编辑）。"""
+    """渲染 00_开篇状态.md（派生视图 · 禁止手工编辑）。"""
     lines = [
         f"# 本章开篇状态 · {chap_name}",
         "",
         "> 派生视图 · 由 build_state_snapshot.py --write-chapter-openers 生成 · **禁止手工编辑**",
-        "> 权威数据 = 05_工作区/00_全局/00_基线状态/ + 各章 04_本章状态履历.md",
+        "> 权威数据 = 05_工作区/02_状态/00_基线状态/ + 各章 02_状态/01_状态履历.md",
         "> 要修改本章起点，请去改上游章节的履历，然后重折。",
     ]
     if cast_ids is None:
@@ -657,7 +674,7 @@ def latest_state_dir(novel_dir):
 
 
 def merge_cache_path(novel_dir):
-    return os.path.join(novel_dir, WORKSPACE_DIRNAME, "00_全局", MERGE_CACHE_FILENAME)
+    return os.path.join(novel_dir, WORKSPACE_DIRNAME, "02_状态", MERGE_CACHE_FILENAME)
 
 
 def value_fingerprint(text):
@@ -699,26 +716,32 @@ def baseline_dir(novel_dir):
     return os.path.join(novel_dir, BASELINE_SUBPATH)
 
 
-CHAPTER_REL_RE = re.compile(r"^(\d+)_第(\d+)部/(\d+)_卷(\d+)/章(\d+)$")
+CHAPTER_REL_RE = re.compile(r"^(\d+)_第(\d+)部/(\d+)_卷(\d+)/(?:(\d+)_)?章(\d+)$")
 
 
 def chapter_sort_key(changelog_path, novel_dir):
     """从履历路径解析 (部号, 卷号, 章号)。不符合规范即抛错，绝不静默排序。"""
-    chap_dir = os.path.dirname(os.path.abspath(changelog_path))
+    # changelog_path 可能是 .../03_章0001/02_状态/01_状态履历.md 或 .../03_章0001/01_状态履历.md
+    parent_dir = os.path.dirname(os.path.abspath(changelog_path))
+    if os.path.basename(parent_dir) == "02_状态":
+        chap_dir = os.path.dirname(parent_dir)
+    else:
+        chap_dir = parent_dir
+
     ws = os.path.join(os.path.abspath(novel_dir), WORKSPACE_DIRNAME)
     rel = os.path.relpath(chap_dir, ws).replace(os.sep, "/")
     m = CHAPTER_REL_RE.match(rel)
     if not m:
         raise StateMergeError(
             f"章目录路径不符合规范: {WORKSPACE_DIRNAME}/{rel}\n"
-            f"应为 NN_第NN部/NN_卷NN/章NNNN（例: 01_第01部/01_卷01/章0001）"
+            f"应为 NN_第NN部/NN_卷NN/NN_章NNNN（例: 03_第01部/03_卷01/03_章0001）"
         )
-    _pp, part, _vp, vol, chap = m.groups()
+    _pp, part, _vp, vol, _cp, chap = m.groups()
     return (int(part), int(vol), int(chap))
 
 
 def iter_workspace_changelogs(novel_dir):
-    """返回 05_工作区/ 下所有 04_本章状态履历.md 的绝对路径，按 (部, 卷, 章) 排序。"""
+    """返回 05_工作区/ 下所有 01_状态履历.md 的绝对路径，按 (部, 卷, 章) 排序。"""
     ws = os.path.join(novel_dir, WORKSPACE_DIRNAME)
     found = []
     if not os.path.isdir(ws):
@@ -731,9 +754,13 @@ def iter_workspace_changelogs(novel_dir):
 
 
 def chapter_rel_name(changelog_path, novel_dir):
-    """把 .../05_工作区/01_第01部/01_卷01/章0001/04_本章状态履历.md
-    表示成 `01_第01部/01_卷01/章0001`（供 manifest 与报告用）。"""
-    chap_dir = os.path.dirname(os.path.abspath(changelog_path))
+    """把 .../05_工作区/03_第01部/03_卷01/03_章0001/02_状态/01_状态履历.md
+    表示成 `03_第01部/03_卷01/03_章0001`（供 manifest 与报告用）。"""
+    parent_dir = os.path.dirname(os.path.abspath(changelog_path))
+    if os.path.basename(parent_dir) == "02_状态":
+        chap_dir = os.path.dirname(parent_dir)
+    else:
+        chap_dir = parent_dir
     ws = os.path.join(os.path.abspath(novel_dir), WORKSPACE_DIRNAME)
     try:
         return os.path.relpath(chap_dir, ws)
@@ -798,12 +825,12 @@ def render_category_index(category, obj_paths, obj_counts, folded_chapter):
 def render_manifest(folded_chapter, tool, n_objects, n_records):
     now = datetime.now(timezone.utc).isoformat()
     return "\n".join([
-        "# 05_工作区/00_全局/01_最新状态 · 同步状态",
+        "# 05_工作区/02_状态/01_最新状态 · 同步状态",
         "",
         "> 由状态脚本自动写入，供人工查看与审计参考，非权威数据。",
         "",
         f"- 折叠至章: {folded_chapter or NONE_MARKER}",
-        "- 基线: 05_工作区/00_全局/00_基线状态/",
+        "- 基线: 05_工作区/02_状态/00_基线状态/",
         f"- 最后运行工具: {tool}",
         f"- 最后运行时间: {now}",
         f"- 对象总数: {n_objects}",
@@ -866,7 +893,7 @@ def parse_manifest_folded_chapter(state_dir):
 def write_state_tree(state_dir, records, *, folded_chapter=None, tool="state_tree.py",
                      prune=True, manifest=True, note=OBJECT_NOTE):
     """
-    把 records 写成 05_工作区/00_全局/01_最新状态/ 的对象树：逐对象文件原子写、重建类目索引、
+    把 records 写成 05_工作区/02_状态/01_最新状态/ 的对象树：逐对象文件原子写、重建类目索引、
     可选写 manifest、可选 prune 掉不再存在的对象文件与空类目目录。
     返回日志行列表。
     """

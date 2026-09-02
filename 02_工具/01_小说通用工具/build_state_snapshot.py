@@ -4,7 +4,7 @@
 """
 只读状态快照工具 (build_state_snapshot.py)
 
-从冻结基线 `05_工作区/00_全局/00_基线状态/` 折叠履历，产出只读的单张 4 列状态表。
+从冻结基线 `05_工作区/02_状态/00_基线状态/` 折叠履历，产出只读的单张 4 列状态表。
 **只读、永不调 LLM**：折叠范围内若有未合并的描述字段变更 -> 报错、退出码 2
 （提示先对那些章跑 merge_chapter_state.py）。
 
@@ -17,7 +17,7 @@
     #   —— 回溯改旧章时，滑动窗口任务需要「第 N 章开篇时的世界状态」
     python3 02_工具/01_小说通用工具/build_state_snapshot.py --at-chapter <章目录> [--output PATH]
 
-    # 逐章开篇状态物化（W4.1）：为每章生成/刷新 03_本章开篇状态.md（值拷贝、派生视图）
+    # 逐章开篇状态物化（W4.1）：为每章生成/刷新 00_开篇状态.md（值拷贝、派生视图）
     #   按各章单章细纲的「## 出场对象」小节裁剪；清单缺失则写全量并告警。
     #   merge_chapter_state.py / rebuild_global_state.py 写完最新状态后会自动调用本模式。
     python3 02_工具/01_小说通用工具/build_state_snapshot.py --write-chapter-openers <小说目录>
@@ -48,7 +48,7 @@ def _fold(novel_dir, changelog_paths):
 
 
 def write_chapter_openers(novel_dir, *, verbose=True):
-    """为每个已建履历的章生成/刷新 03_本章开篇状态.md（派生视图）。
+    """为每个已建履历的章生成/刷新 00_开篇状态.md（派生视图）。
     第 N 章开篇状态 = 基线 ⊕ 折叠「排在第 N 章之前」的全部章履历，再按第 N 章
     单章细纲的「## 出场对象」清单裁剪。返回写入路径列表。
 
@@ -88,7 +88,7 @@ def main():
     g.add_argument("--volume-dir", help="卷目录：折叠到该卷最后一章（含）")
     g.add_argument("--at-chapter", help="章目录：折叠到该章之前（不含）= 该章开篇状态")
     g.add_argument("--write-chapter-openers", metavar="小说目录",
-                   help="为每章生成/刷新 03_本章开篇状态.md（按细纲「## 出场对象」裁剪）")
+                   help="为每章生成/刷新 00_开篇状态.md（按细纲「## 出场对象」裁剪）")
     ap.add_argument("--novel-dir", help="小说根目录（缺省自动定位）")
     ap.add_argument("--output", help="输出文件路径")
     args = ap.parse_args()
@@ -100,7 +100,7 @@ def main():
             print("错误: 无法定位小说根目录")
             sys.exit(1)
         w = write_chapter_openers(nd)
-        print(f"共刷新 {len(w)} 个 03_本章开篇状态.md")
+        print(f"共刷新 {len(w)} 个 00_开篇状态.md")
         return
 
     anchor = os.path.abspath(args.volume_dir or args.at_chapter)

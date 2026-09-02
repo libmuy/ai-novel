@@ -66,15 +66,15 @@ class StateRule(AuditRule):
         vocab = _load_field_vocab(novel_dir, context)
 
         # 1. 检查状态树
-        self._check_state_tree(context, novel_dir / "05_工作区" / "00_全局" / "01_最新状态", "全局状态", vocab, findings)
-        self._check_state_tree(context, novel_dir / "05_工作区" / "00_全局" / "00_基线状态", "基线", vocab, findings)
+        self._check_state_tree(context, novel_dir / "05_工作区" / "02_状态" / "01_最新状态", "全局状态", vocab, findings)
+        self._check_state_tree(context, novel_dir / "05_工作区" / "02_状态" / "00_基线状态", "基线", vocab, findings)
 
         # 2. 检查章级状态履历语法
         workspace_dir = novel_dir / "05_工作区"
         if workspace_dir.exists():
             invalid_fields, invalid_syntax, type_mismatches = [], [], []
             for fi in context.files:
-                if fi.relative_path.startswith("05_工作区/") and fi.relative_path.endswith("04_本章状态履历.md"):
+                if fi.relative_path.startswith("05_工作区/") and fi.relative_path.endswith("01_状态履历.md"):
                     rel = fi.relative_path
                     lines = fi.content.splitlines()
                     for i, line in enumerate(lines):
@@ -137,12 +137,12 @@ class StateRule(AuditRule):
         return findings
 
     def _check_chapter_opener_drift(self, context: AuditContext, novel_dir: Path, stmod: Any, findings: list):
-        """03_本章开篇状态.md（派生视图）与「基线 ⊕ 早于本章的履历、按细纲出场对象裁剪」的重算结果不符
+        """00_开篇状态.md（派生视图）与「基线 ⊕ 早于本章的履历、按细纲出场对象裁剪」的重算结果不符
         → 有人手改了派生文件，或改了上游履历后漏跑 build_state_snapshot.py --write-chapter-openers。"""
-        baseline = novel_dir / "05_工作区" / "00_全局" / "00_基线状态"
+        baseline = novel_dir / "05_工作区" / "02_状态" / "00_基线状态"
         if not baseline.exists():
             return
-        opener_name = getattr(stmod, "CHAPTER_OPENER_FILENAME", "03_本章开篇状态.md")
+        opener_name = getattr(stmod, "CHAPTER_OPENER_FILENAME", "00_开篇状态.md")
         changelogs = stmod.iter_workspace_changelogs(str(novel_dir))
         prot = stmod.protagonist_state_id(str(novel_dir))
         cache = stmod.load_merge_cache(str(novel_dir))
@@ -169,9 +169,9 @@ class StateRule(AuditRule):
         if drift:
             findings.append(Finding(
                 severity=Severity.WARNING, rule=self.name, code="STATE025",
-                message=f"发现 {len(drift)} 处 03_本章开篇状态.md 与重算结果不符（派生文件被手改，或上游履历改动后漏刷新）",
+                message=f"发现 {len(drift)} 处 00_开篇状态.md 与重算结果不符（派生文件被手改，或上游履历改动后漏刷新）",
                 file=None,
-                suggestion="跑 `python3 02_工具/01_小说通用工具/build_state_snapshot.py --write-chapter-openers <小说目录>` 重新物化；不要手工编辑 03_本章开篇状态.md",
+                suggestion="跑 `python3 02_工具/01_小说通用工具/build_state_snapshot.py --write-chapter-openers <小说目录>` 重新物化；不要手工编辑 00_开篇状态.md",
                 category="05_工作区", locations=drift,
             ))
 
@@ -249,12 +249,12 @@ class StateRule(AuditRule):
         ws = novel_dir / "05_工作区"
         if ws.exists():
             for fi in context.files:
-                if fi.relative_path.startswith("05_工作区/") and fi.relative_path.endswith("04_本章状态履历.md"):
+                if fi.relative_path.startswith("05_工作区/") and fi.relative_path.endswith("01_状态履历.md"):
                     try:
                         stmod.parse_md_table(str(fi.file_path), strict=True)
                     except stmod.StateMergeError as e:
                         unparseable.append(f"{fi.relative_path}: {e}")
-        for state_dir_rel in ["05_工作区/00_全局/00_基线状态", "05_工作区/00_全局/01_最新状态"]:
+        for state_dir_rel in ["05_工作区/02_状态/00_基线状态", "05_工作区/02_状态/01_最新状态"]:
             state_dir = novel_dir / state_dir_rel
             if not state_dir.exists():
                 continue
@@ -289,7 +289,7 @@ class StateRule(AuditRule):
                 file=None, suggestion="删除这些文件；状态起点统一读 01_最新状态/，改旧章用 build_state_snapshot.py --at-chapter",
                 category="05_工作区", locations=legacy_03
             ))
-        gdir = novel_dir / "05_工作区" / "00_全局" / "01_最新状态"
+        gdir = novel_dir / "05_工作区" / "02_状态" / "01_最新状态"
         flat = sorted(p.name for p in gdir.glob("0[1-5]_*状态.md")) if gdir.exists() else []
         if flat:
             findings.append(Finding(
@@ -300,12 +300,12 @@ class StateRule(AuditRule):
             ))
 
     def _check_state_drift(self, context: AuditContext, novel_dir: Path, stmod: Any, findings: list):
-        baseline = novel_dir / "05_工作区" / "00_全局" / "00_基线状态"
-        live = novel_dir / "05_工作区" / "00_全局" / "01_最新状态"
+        baseline = novel_dir / "05_工作区" / "02_状态" / "00_基线状态"
+        live = novel_dir / "05_工作区" / "02_状态" / "01_最新状态"
         if not baseline.exists():
             findings.append(Finding(
                 severity=Severity.WARNING, rule=self.name, code="STATE014",
-                message="冻结基线 05_工作区/00_全局/00_基线状态/ 不存在，无法校验全局状态一致性",
+                message="冻结基线 05_工作区/02_状态/00_基线状态/ 不存在，无法校验全局状态一致性",
                 file=None, suggestion="新书用技能 08_基线状态初始化 生成基线；旧书用 migrate_state_layout.py 迁移",
                 category="01_最新状态", locations=[]
             ))
@@ -346,7 +346,7 @@ class StateRule(AuditRule):
         all_paths = stmod.iter_workspace_changelogs(str(novel_dir))
         if not all_paths:
             return
-        folded = stmod.parse_manifest_folded_chapter(str(novel_dir / "05_工作区" / "00_全局" / "01_最新状态"))
+        folded = stmod.parse_manifest_folded_chapter(str(novel_dir / "05_工作区" / "02_状态" / "01_最新状态"))
         names = [stmod.chapter_rel_name(p, str(novel_dir)) for p in all_paths]
         if folded is None:
             unmerged = names
@@ -363,7 +363,7 @@ class StateRule(AuditRule):
             ))
 
     def _check_cascade_terminal_conflicts(self, context: AuditContext, novel_dir: Path, stmod: Any, findings: list):
-        baseline = novel_dir / "05_工作区" / "00_全局" / "00_基线状态"
+        baseline = novel_dir / "05_工作区" / "02_状态" / "00_基线状态"
         changelogs = stmod.iter_workspace_changelogs(str(novel_dir))
         if not baseline.exists() or len(changelogs) < 2:
             return
@@ -396,7 +396,7 @@ class StateRule(AuditRule):
                 findings.append(Finding(
                     severity=Severity.ERROR, rule=self.name, code="STATE018",
                     message=f"{rel} 履历合并失败，级联检查中断: {e}",
-                    file=rel, suggestion="修正该章 04_本章状态履历.md 中的非法值后重跑。",
+                    file=rel, suggestion="修正该章 01_状态履历.md 中的非法值后重跑。",
                     category="05_工作区", locations=[rel]
                 ))
                 return
@@ -419,19 +419,19 @@ class StateRule(AuditRule):
             findings.append(Finding(
                 severity=Severity.ERROR, rule=self.name, code="STATE019",
                 message=f"发现 {len(char_conflicts)} 处：角色终态（死亡/退场）之后仍有履历变更",
-                file=None, suggestion="核对被修改的早期章节情节，修正对应 04 履历后重跑 rebuild_global_state.py",
+                file=None, suggestion="核对被修改的早期章节情节，修正对应履历后重跑 rebuild_global_state.py",
                 category="05_工作区", locations=char_conflicts
             ))
         if item_conflicts:
             findings.append(Finding(
                 severity=Severity.ERROR, rule=self.name, code="STATE020",
                 message=f"发现 {len(item_conflicts)} 处：物品终态（损毁/易主）之后仍被变更或被原持有者使用",
-                file=None, suggestion="核对物品损毁/易主的章节，修正对应 04 履历后重跑 rebuild_global_state.py",
+                file=None, suggestion="核对物品损毁/易主的章节，修正对应履历后重跑 rebuild_global_state.py",
                 category="05_工作区", locations=item_conflicts
             ))
 
     def _check_stale_descriptive_merge(self, context: AuditContext, novel_dir: Path, stmod: Any, findings: list):
-        baseline = novel_dir / "05_工作区" / "00_全局" / "00_基线状态"
+        baseline = novel_dir / "05_工作区" / "02_状态" / "00_基线状态"
         if not baseline.exists():
             return
         changelogs = stmod.iter_workspace_changelogs(str(novel_dir))
