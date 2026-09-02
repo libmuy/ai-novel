@@ -18,3 +18,6 @@ TMP/
 
 # 修改计划不入库（用户 2026-09-01）
 系统修改计划/
+
+# Claude Code 本地 worktree（fork 会话隔离用，勿入库）
+.claude/worktrees/
