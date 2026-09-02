@@ -300,6 +300,20 @@ class TestAuditEngine(unittest.TestCase):
         found = self._run_plan_beat(body)
         self.assertIn("PLAN_BEAT002", found)
         self.assertIn("FH-068", "".join(found["PLAN_BEAT002"].locations))
+        # 伏笔小节的问题不应落到 003
+        self.assertNotIn("PLAN_BEAT003", found)
+
+    def test_plan_beat_generic_ref_not_in_summary(self):
+        # 非伏笔区块：某行提到「第05章 × @人物.[周莽]」，但节拍表根本没有第05章行
+        body = self._BEAT + (
+            "\n## 【本卷关系变化】\n\n"
+            "| 弧线 | 触发事件 | 关联卡 |\n|---|---|---|\n"
+            "| @主角 ↔ @人物.[周莽] | 第05章 深谈定师徒 | 07_人物_周莽.md |\n"
+        )
+        found = self._run_plan_beat(body)
+        self.assertIn("PLAN_BEAT003", found)
+        self.assertIn("第5章", "".join(found["PLAN_BEAT003"].locations))
+        self.assertNotIn("PLAN_BEAT002", found)
 
     def test_plan_beat_clean(self):
         # 埋设伏笔章节与摘要一致；无章节列
@@ -313,6 +327,73 @@ class TestAuditEngine(unittest.TestCase):
         found = self._run_plan_beat(body)
         self.assertNotIn("PLAN_BEAT001", found)
         self.assertNotIn("PLAN_BEAT002", found)
+
+    # ---- plan_beat 004/005/006：配角完整性 ----
+
+    _BEAT_CAST = (
+        "## 【章节节拍表】\n\n"
+        "| 章节 | 一句话剧情摘要 | 必用模板 | 核心事件类型 | 钩子类型 |\n"
+        "|---|---|---|---|---|\n"
+        "| 第01章 | @主角 归家，母亲 @人物.[柳禾] 咳血；@人物.[周莽] 在矿道递水 | 05_开篇三章指南 | 入戏/危机 | 重钩 |\n"
+        "| 第10章 | @主角 与 @人物.[周莽] 深谈矿道旧事 | 00_通用写作规则 | 日常/铺垫 | 轻钩 |\n"
+        "| 第20章 | @人物.[周莽] 引爆矿囊与敌同归于尽，@主角 痛失挚友 | 10_事件与感悟卡模板 | 抉择/道义 | 轻钩 |\n"
+    )
+
+    def test_plan_beat_exit_cast_not_in_beat(self):
+        # 柳禾列入退场配角，但她只在第01章「咳血」出现、无退场字眼
+        body = self._BEAT_CAST + (
+            "\n## 【角色与关系】\n\n### 本卷退场配角\n\n| 角色 | 退场方式 | 影响 |\n|---|---|---|\n"
+            "| @人物.[柳禾] | 病故 | 主角断了念想 |\n"
+        )
+        found = self._run_plan_beat(body)
+        self.assertIn("PLAN_BEAT004", found)
+        self.assertIn("柳禾", "".join(found["PLAN_BEAT004"].locations))
+
+    def test_plan_beat_exit_cast_ok(self):
+        # 周莽列入退场配角，第20章摘要「同归于尽」即退场落点
+        body = self._BEAT_CAST + (
+            "\n## 【角色与关系】\n\n### 本卷退场配角\n\n| 角色 | 退场方式 | 影响 |\n|---|---|---|\n"
+            "| @人物.[周莽] | 引爆矿囊与敌同归于尽 | 主角精神支柱崩塌 |\n"
+        )
+        found = self._run_plan_beat(body)
+        self.assertNotIn("PLAN_BEAT004", found)
+
+    def test_plan_beat_deathclock_no_disposition(self):
+        # 柳禾人物行含「寿元将尽」，在节拍表出场，但退场配角/卷末状态均未交代其存殁
+        body = self._BEAT_CAST + (
+            "\n## 【角色与关系】\n\n### 本卷新出场配角\n\n| 角色 | 关联卡 | 职能/定位 |\n|---|---|---|\n"
+            "| @人物.[柳禾] | 07_人物_柳禾.md | 主角母亲，肺痨晚期，寿元将尽 |\n"
+        )
+        found = self._run_plan_beat(body)
+        self.assertIn("PLAN_BEAT005", found)
+        self.assertIn("柳禾", "".join(found["PLAN_BEAT005"].locations))
+
+    def test_plan_beat_deathclock_disposed_in_volume_end(self):
+        body = self._BEAT_CAST + (
+            "\n## 【角色与关系】\n\n### 本卷新出场配角\n\n| 角色 | 关联卡 | 职能/定位 |\n|---|---|---|\n"
+            "| @人物.[柳禾] | 07_人物_柳禾.md | 主角母亲，肺痨晚期，寿元将尽 |\n"
+            "\n## 【卷末状态】\n\n### 本卷结束时主角状态\n\n"
+            "- 母亲 @人物.[柳禾] 本卷未获续命丹，卷末仍在世，去留留待卷2。\n"
+        )
+        found = self._run_plan_beat(body)
+        self.assertNotIn("PLAN_BEAT005", found)
+
+    def test_plan_beat_relation_arc_untraceable(self):
+        body = self._BEAT_CAST + (
+            "\n## 【角色与关系】\n\n### 本卷关系变化\n\n| 弧线 | 触发事件 | 关联卡 |\n|---|---|---|\n"
+            "| @主角 ↔ @人物.[赵五] | 结盟 → 决裂 | 07_人物_赵五.md |\n"
+        )
+        found = self._run_plan_beat(body)
+        self.assertIn("PLAN_BEAT006", found)
+        self.assertIn("赵五", "".join(found["PLAN_BEAT006"].locations))
+
+    def test_plan_beat_relation_arc_ok(self):
+        body = self._BEAT_CAST + (
+            "\n## 【角色与关系】\n\n### 本卷关系变化\n\n| 弧线 | 触发事件 | 关联卡 |\n|---|---|---|\n"
+            "| @主角 ↔ @人物.[周莽] | 恩人 → 挚友 → 继承遗志 | 07_人物_周莽.md |\n"
+        )
+        found = self._run_plan_beat(body)
+        self.assertNotIn("PLAN_BEAT006", found)
 
     # ---- STATE015 回归：drift 检查必须带描述合并缓存 ----
 
