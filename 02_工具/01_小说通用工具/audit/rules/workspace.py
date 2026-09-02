@@ -147,6 +147,9 @@ class WorkspaceRule(AuditRule):
             self._check_dir_numbering(d, novel_dir, findings)
 
     def _check_prompt_output_pairing(self, workspace_dir: Path, novel_dir: Path, findings: List[Finding]):
+        # 每个 00_提示词/<x>.md 需有配对的 01_模型输出/<x>.md（含冷读循环的 <原名>_修订N.md，
+        # 见技能 04_单章质量验收.md / AGENTS.md §七）。反向（输出无对应提示词）不检查——
+        # 历史归档稿如 <原名>_v1_旧提示词_<日期>.md 是允许的孤儿输出。
         # 扫描所有 00_提示词 目录
         for prompt_dir in workspace_dir.rglob("00_提示词"):
             if not prompt_dir.is_dir():
