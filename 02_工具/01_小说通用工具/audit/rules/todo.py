@@ -97,7 +97,7 @@ class TodoRule(AuditRule):
             final_status = progress_status.get(typ, "")
             is_final = "定稿" in final_status
             total = sum(len(v) for v in files.values())
-            source_category = CATEGORY_KEYWORD_IN_PROGRESS.get(typ, "").replace("提示.md", "")
+            source_category = CATEGORY_KEYWORD_IN_PROGRESS.get(typ, "").rstrip("/")
             findings.append(Finding(
                 severity=Severity.WARNING if is_final else Severity.INFO,
                 rule=self.name,

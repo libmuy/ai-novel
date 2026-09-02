@@ -23,7 +23,8 @@ import re
 import shutil
 import sys
 
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# 本脚本位于 02_工具/00_系统级/，仓库根需向上三级
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SKELETON = os.path.join(REPO_ROOT, "00_通用模板", "05_项目骨架模板")
 AGENTS_TEMPLATE = os.path.join(REPO_ROOT, "00_通用模板", "00_小说级AGENTS模板.md")
 DATA_DIR = os.path.join(REPO_ROOT, "01_小说数据")

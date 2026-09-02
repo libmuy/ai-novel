@@ -8,14 +8,18 @@ from ..models import TodoItem, FileInfo
 from ..context import AuditContext
 
 TODO_PATTERN = re.compile(r"@(地名|势力|人物|类型|书籍|伏笔)\.\[TODO-([^\]]+)\]")
+# 各占位符类型 -> 在 00_进度.md 里唯一标识该类「源分类」所在行的关键字。
+# 取各分类的权威产出目录/文件路径（稳定，不随提示词编号体系变动）。
 CATEGORY_KEYWORD_IN_PROGRESS = {
-    "地名": "02_地理区域提示.md",
-    "势力": "03_势力组织提示.md",
-    "人物": "05_主角与核心配角提示.md",
-    "类型": "04_资源提示.md",
-    "书籍": "08_书籍库提示.md",
-    "伏笔": "09_全书卷大纲提示.md",
+    "地名": "02_数据库/02_地理区域/",
+    "势力": "02_数据库/03_势力组织/",
+    "人物": "02_数据库/07_人物/",
+    "类型": "02_数据库/04_资源/",
+    "书籍": "02_数据库/06_书籍/",
+    "伏笔": "规划_卷01.md",  # 伏笔在「单卷完整大纲」任务里落位，取其大纲行
 }
+# 成熟度标记（用于从 00_进度.md 表行里挑出「状态」单元格）
+_MATURITY_MARKERS = ("定稿", "待校验", "草稿")
 TODO_GLOBAL_PREFIXES = {"FC", "CH", "FH", "BK", "DN"}
 
 
@@ -78,6 +82,12 @@ class TodoResolver:
             for todo_type, keyword in CATEGORY_KEYWORD_IN_PROGRESS.items():
                 if keyword in line:
                     cells = [c.strip() for c in line.strip("|").split("|")]
-                    if cells:
-                        status[todo_type] = cells[-1]
+                    if not cells:
+                        continue
+                    # 优先取含成熟度标记的单元格（「状态」列），回退到最后一格
+                    cell = next(
+                        (c for c in cells if any(m in c for m in _MATURITY_MARKERS)),
+                        cells[-1],
+                    )
+                    status[todo_type] = cell
         return status
