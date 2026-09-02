@@ -23,6 +23,7 @@ from audit.rules.todo import TodoRule
 from audit.rules.setting import SettingRule
 from audit.rules.planning import PlanningRule
 from audit.rules.manuscript import ManuscriptRule
+from audit.rules.manuscript_lexicon import ManuscriptLexiconRule
 from audit.rules.geography import GeographyRule
 from audit.rules.ids import IdRule
 from helpers import make_novel, _write_changelog
@@ -93,6 +94,49 @@ class TestAuditEngine(unittest.TestCase):
         findings = rule.run(context)
         codes = [f.code for f in findings]
         self.assertIn("MANUSCRIPT001", codes)
+
+    # ---- manuscript_lexicon：正文禁用词 ----
+
+    def _run_lexicon(self, manuscript: str, wordlist=None):
+        ms_dir = self.novel_dir / "10_正文" / "01_第01部" / "01_卷01"
+        ms_dir.mkdir(parents=True, exist_ok=True)
+        (ms_dir / "章0001.md").write_text(manuscript, encoding="utf-8")
+        if wordlist is not None:
+            (self.novel_dir / "01_设定").mkdir(exist_ok=True)
+            (self.novel_dir / "01_设定" / "00_禁用词表.md").write_text(wordlist, encoding="utf-8")
+        return {f.code: f for f in ManuscriptLexiconRule().run(AuditContext(self.novel_dir))}
+
+    def test_lexicon_no_wordlist_info(self):
+        found = self._run_lexicon("手电光柱切进沟里。")
+        self.assertIn("LEXICON000", found)
+        self.assertNotIn("LEXICON001", found)
+
+    def test_lexicon_substring_hit(self):
+        found = self._run_lexicon(
+            "手电光柱切进沟里。\n他攥紧矿钉。",
+            "## 包含\n手电   // 现代照明\n塑料   // 现代材料\n")
+        self.assertIn("LEXICON001", found)
+        self.assertIn("手电", found["LEXICON001"].message)
+        self.assertIn("章0001.md:第1行", "".join(found["LEXICON001"].locations))
+
+    def test_lexicon_clean(self):
+        found = self._run_lexicon(
+            "灯火在沟壁上乱跳。\n他攥紧矿钉。",
+            "## 包含\n手电   // 现代照明\n")
+        self.assertNotIn("LEXICON001", found)
+        self.assertNotIn("LEXICON000", found)
+
+    def test_lexicon_pending_section_not_enforced(self):
+        found = self._run_lexicon(
+            "他走了三公里才到矿口。",
+            "## 包含\n手电\n\n## 待确认\n公里   // 距离单位待定\n")
+        self.assertNotIn("LEXICON001", found)
+
+    def test_lexicon_regex_section(self):
+        found = self._run_lexicon(
+            "他走了三公里才到矿口。",
+            "## 正则\n\\d*\\s*公里   // 现代距离\n")
+        self.assertIn("LEXICON001", found)
 
     def test_todo_done_missing_entity(self):
         db_dir = self.novel_dir / "02_数据库"
