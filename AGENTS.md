@@ -96,6 +96,14 @@ cp -r 00_通用模板/05_项目骨架模板/ 01_小说数据/<NN>_<小说名>/
 - **使用时机**：建议在每次云端回填分割完成、或占位符回补前后各跑一次；`rebuild_global_state.py` 重折后**必须**跑一次。
 - **局限说明**：脚本对 `00_进度.md` 中各分类的权威产出路径（如 `02_数据库/02_地理区域/`）存在硬编码耦合，用于定位「源分类成熟度」表行；若数据库分类目录调整，需同步更新脚本内 `CATEGORY_KEYWORD_IN_PROGRESS`（与 `STANDARD_TOP_DIRS`）。
 
+### 8.1.1 多模型冷读评审 `02_工具/01_小说通用工具/review_manuscript.py`
+
+- **用途**：对云端产出的**正文/细纲**做「独立对抗性重读」——换一批模型、不看它自己的思考过程，只挑逻辑硬伤（前后矛盾/数值不闭合/物理不合理/引入未回收/人物失真/细纲外脑补/现代词穿帮）。`audit_consistency.py` 抓不到的语义类问题靠这个。
+- **评审器池**：`02_工具/00_系统级/review.config.toml` 配——`opencode`（OpenCode CLI 免费模型，默认开）∥ `local_qwen`（`"auto"` 探测 `ai-station.local:8080`，活着才加）∥ `claude_subagent`（默认关，`true` 时脚本只置 `claude_subagent_requested=true`，由主 Agent 另 spawn 只喂正文的 general-purpose subagent）。两家外部评审器全不可用且 `claude_subagent=false` → 退出码 3、不写文件、不静默放行。
+- **用法**：`python3 02_工具/01_小说通用工具/review_manuscript.py --chapter-dir <章工作区目录> [--mode manuscript|outline]`（或 `--manuscript <path>`）。两遍冷读（无参照 / 带细纲+世界法则+主角档案+禁用词表）。内联跑 `manuscript_lexicon` 确定性检查。
+- **输出**：合并发现 JSON 到 stdout（主 Agent 分诊、分级、写外科手术式修改提示词）；人类可读记录**追加**（带时间戳、不覆盖人工内容）到正文 `<章>/02_状态/02_正文校验记录.md` / 细纲 `<章>/02_状态/03_细纲对照记录.md`。`--no-write` 只出 JSON。
+- **使用时机**：正文/细纲从云端落位为草稿后、标「待校验」之前；循环 ≤3 轮收敛或用户 waive。见技能 `03_任务技能/02_小说级/04_单章质量验收.md`。
+
 ### 8.2 状态脚本
 
 状态模型：`05_工作区/02_状态/01_最新状态/`（每对象一文件、按类目分层）是全书唯一权威状态存储；

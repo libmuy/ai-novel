@@ -1,0 +1,29 @@
+# 多模型冷读评审器配置。
+#
+# 用途：review_manuscript.py 对云端产出的正文/细纲做「独立对抗性重读」——
+#       换一批模型、不看它自己的思考过程，只挑逻辑硬伤。
+#
+# 评审器池（并集取发现）：
+#   opencode        —— OpenCode CLI 的免费模型（不同架构，默认开）
+#   local_qwen      —— 本地 llama.cpp（ai-station.local:8080，端点见 llm.config.toml）
+#   claude_subagent —— 由 review_manuscript.py 打标记，主 Agent 另行 spawn（收费，默认关）
+#
+# 两家（opencode + local_qwen）都不可用且 claude_subagent = false 时，
+# 脚本报「无可用独立评审器」并非零退出，不静默放行。
+
+[critics]
+opencode = true
+opencode_models = ["nemotron-3-ultra-free", "mimo-v2.5-free"]
+
+# "auto" = 先探测 ai-station.local:8080，活着才加入；true = 强制用（挂了则报错）；false = 不用
+local_qwen = "auto"
+
+# true 时脚本在输出 JSON 里置 claude_subagent_requested=true，由主 Agent spawn 一个
+# general-purpose subagent（只喂正文 + 冷读清单，不给主对话上下文 → 真冷读）。
+claude_subagent = false
+
+[run]
+# 单个 opencode 模型调用超时（秒）；免费档偶发服务器错，脚本会重试 1 次再回退下一个模型
+opencode_timeout = 240
+# 冷读遍数：1 = 仅无参照；2 = 仅带参照；both = 两遍
+passes = "both"
