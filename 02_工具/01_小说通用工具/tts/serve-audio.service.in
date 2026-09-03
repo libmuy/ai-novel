@@ -1,0 +1,39 @@
+# serve_audio.py 的 systemd 常驻服务模板。
+# 占位符由 install-service.sh 用 sed 填充后写到 /etc/systemd/system/。
+# 手工改：填好 @@...@@ 后 `sudo cp` 过去、`systemctl daemon-reload`。
+
+[Unit]
+Description=小说章节浏览/音频服务 serve_audio.py (@@TITLE@@)
+Documentation=file://@@REPO@@/AGENTS.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@@USER@@
+WorkingDirectory=@@REPO@@
+ExecStart=/usr/bin/python3 @@REPO@@/02_工具/01_小说通用工具/serve_audio.py @@NOVEL_DIR@@ --host @@HOST@@ --port @@PORT@@
+Restart=on-failure
+RestartSec=3
+
+# —— 资源兜底（Pi 上常驻空闲也几乎不占；这里只是防意外）——
+Nice=10
+CPUWeight=20
+MemoryMax=128M
+TasksMax=64
+
+# —— 加固：本服务只读文件、只对外提供 HTTP ——
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectControlGroups=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+LockPersonality=true
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

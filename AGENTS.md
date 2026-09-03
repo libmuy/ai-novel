@@ -150,5 +150,6 @@ LLM 客户端在 `02_工具/00_系统级/_llm.py`。
 - **用法**：`python3 02_工具/01_小说通用工具/serve_audio.py <小说目录> [--host 0.0.0.0] [--port 8765] [--base-url URL] [--title 标题]`。纯标准库、按需手动跑、Ctrl-C 停。`<小说目录>` = 含 `10_正文/` 与 `05_工作区/` 的那层。RSS 链接默认按请求 Host 头拼（局域网免配置），反代/mDNS 名走 `--base-url`。
 - **feed 排序**：条目 pubDate 由「部/卷/章」号合成，严格按阅读顺序，重生成某章不打乱订阅端。时长优先读 manifest `duration_seconds`，缺失则按 mp3 首帧比特率 CBR 估算。
 - **安全**：默认监听 `0.0.0.0`、无鉴权，仅适合可信局域网。章节定位只由整数部/卷/章/场号拼装；工作区文件浏览器对 `?f=` 做 realpath 越界校验；均无目录穿越。
+- **常驻服务**（可选）：`sudo bash 02_工具/01_小说通用工具/tts/install-service.sh [--novel-dir … --port … --name …]` 装成 systemd 服务（模板 `serve-audio.service.in`）——开机自启、崩溃重拉，带资源兜底（`MemoryMax=128M`/`CPUWeight=20`/`Nice=10`）与沙箱加固（`ProtectSystem=strict` 只读、`NoNewPrivileges` 等）。空闲常驻约 24 MiB RSS、CPU≈0。多本小说各 `--name <后缀>` + 不同 `--port`。卸载 `… install-service.sh --uninstall [--name …]`。
 
 > 若将某本小说目录作为工作区根目录，以该小说目录中的 `AGENTS.md` 和 `00_通用模板/` 软链接为准。
