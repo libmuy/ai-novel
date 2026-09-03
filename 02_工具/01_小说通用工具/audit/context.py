@@ -69,3 +69,14 @@ class AuditContext:
                     if name not in self.entities[cat]:
                         self.entities[cat][name] = []
                     self.entities[cat][name].append(rel)
+
+                    # 叶子名键：文件名按 "_" 分割后的最后一段。
+                    # 层级地名文件名是父子拼接的（父卡 02_地理区域_苍玄界_灰壤凡域.md，
+                    # 子卡 ..._灰壤凡域_兽牙岭.md），clean_name/全名两个键都不是单独的
+                    # "灰壤凡域"，导致精确查找必失败、只能走子串模糊回退，而模糊回退
+                    # 又会把父卡自身和它所有子卡一起命中判为 AMBIGUOUS。额外注册叶子名键
+                    # 后，精确查找即可唯一命中对应卡片，避免这类层级实体的误报。
+                    leaf_name = name.rsplit("_", 1)[-1]
+                    self.entities[cat].setdefault(leaf_name, [])
+                    if rel not in self.entities[cat][leaf_name]:
+                        self.entities[cat][leaf_name].append(rel)

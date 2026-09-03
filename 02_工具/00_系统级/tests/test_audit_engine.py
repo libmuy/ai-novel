@@ -186,6 +186,39 @@ class TestAuditEngine(unittest.TestCase):
         findings = rule.run(context)
         self.assertEqual([f for f in findings if f.code == "TODO007"], [])
 
+    def test_hierarchical_region_reference_resolves_to_parent(self):
+        # 回归 REF002 误报：地理区域卡文件名按层级拼接
+        # （父卡 …_苍玄界_灰壤凡域.md，子卡 …_苍玄界_灰壤凡域_兽牙岭.md /
+        # …_苍玄界_灰壤凡域_枯港矿城.md）。旧版实体索引只注册 clean_name
+        # （苍玄界_灰壤凡域）与全名两个键，单独的「灰壤凡域」查不到精确键，
+        # 只能走子串模糊回退——父卡与全部子卡的键里都含有「灰壤凡域」子串，
+        # 于是一起命中被误判 AMBIGUOUS。叶子名键修复后应唯一精确命中父卡。
+        geo_dir = self.novel_dir / "02_数据库" / "02_地理区域"
+        geo_dir.mkdir(parents=True, exist_ok=True)
+        parent = geo_dir / "02_地理区域_苍玄界_灰壤凡域.md"
+        parent.write_text("# 地理区域卡 · 灰壤凡域\n", encoding="utf-8")
+        (geo_dir / "02_地理区域_苍玄界_灰壤凡域_兽牙岭.md").write_text(
+            "# 地理区域卡 · 兽牙岭\n", encoding="utf-8")
+        (geo_dir / "02_地理区域_苍玄界_灰壤凡域_枯港矿城.md").write_text(
+            "# 地理区域卡 · 枯港矿城\n", encoding="utf-8")
+
+        plan_file = self.novel_dir / "03_规划" / "test_region.md"
+        plan_file.write_text("主角所在 @区域.[灰壤凡域]", encoding="utf-8")
+
+        context = AuditContext(self.novel_dir)
+        resolver = ReferenceResolver(context)
+        refs = resolver.extract_references(context.file_map["03_规划/test_region.md"])
+        region_refs = [r for r in refs if r.entity_type == "区域"]
+        self.assertEqual(len(region_refs), 1)
+        ref = region_refs[0]
+        self.assertEqual(ref.status, "RESOLVED")
+        self.assertNotEqual(ref.status, "AMBIGUOUS")
+        self.assertEqual(ref.resolved_target, parent.relative_to(self.novel_dir).as_posix())
+
+        # 同时确认 ReferenceRule 层面不产生 REF002
+        rule_findings = ReferenceRule().run(context)
+        self.assertNotIn("REF002", [f.code for f in rule_findings])
+
     def test_path_traversal_prevention(self):
         broken_file = self.novel_dir / "01_设定" / "test_escape.md"
         broken_file.write_text("逃逸 [秘密](../../secret.md)", encoding="utf-8")
