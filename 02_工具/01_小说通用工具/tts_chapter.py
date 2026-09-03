@@ -305,6 +305,36 @@ def _concat_files(parts: list[Path], dest: Path):
     _atomic_write_bytes(dest, bytes(buf))
 
 
+def _audio_duration_seconds(path: Path) -> int:
+    """粗略时长（秒）。mp3 按首帧比特率 CBR 估算；wav 读 fmt 块；失败退 0。"""
+    try:
+        size = path.stat().st_size
+        data = path.read_bytes()[:8192]
+    except OSError:
+        return 0
+    if data[:4] == b"RIFF" and data[8:12] == b"WAVE":
+        j = data.find(b"fmt ")
+        if j >= 0 and len(data) >= j + 24:
+            byte_rate = int.from_bytes(data[j + 16:j + 20], "little")
+            if byte_rate:
+                return max(1, round(size / byte_rate))
+        return 0
+    i = data.find(b"\xff")
+    while 0 <= i < len(data) - 4:
+        b1, b2 = data[i + 1], data[i + 2]
+        if data[i] == 0xFF and (b1 & 0xE0) == 0xE0:
+            ver, layer = (b1 >> 3) & 0x03, (b1 >> 1) & 0x03
+            bri = (b2 >> 4) & 0x0F
+            if layer == 1 and ver != 1 and bri not in (0, 15):
+                v1 = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320]
+                v2 = [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160]
+                kbps = (v1 if ver == 3 else v2)[bri]
+                if kbps:
+                    return max(1, round(size * 8 / (kbps * 1000)))
+        i = data.find(b"\xff", i + 1)
+    return max(1, round(size * 8 / 48000))
+
+
 # ---------------------------------------------------------------- manifest
 
 def _read_manifest(path: Path) -> dict:
@@ -420,7 +450,9 @@ def run(args) -> dict:
                 _concat_files(scene_files, out_dir / audio_names[0])
 
     total_bytes = sum((out_dir / n).stat().st_size for n in audio_names)
+    duration = sum(_audio_duration_seconds(out_dir / n) for n in audio_names)
     result["bytes"] = total_bytes
+    result["duration_seconds"] = duration
     manifest = dict(key)
     manifest.update({
         "chapter": stem,
@@ -429,6 +461,7 @@ def run(args) -> dict:
         "char_count": char_count,
         "outputs": audio_names,
         "bytes": total_bytes,
+        "duration_seconds": duration,
         "tool_version": TOOL_VERSION,
         "generated_at": _dt.datetime.now().isoformat(timespec="seconds"),
     })
