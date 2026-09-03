@@ -524,5 +524,54 @@ class TestChatDispatch(unittest.TestCase):
         self.assertTrue(called.get("hit"))
 
 
+class TestChapterDirAcceptsChapterRoot(unittest.TestCase):
+    """回归：merge_chapter_state.py --chapter-dir 必须接受「本章目录」本身。
+
+    AGENTS.md / 技能 03_章节状态对账 / 本脚本 --help 三处一律写 `--chapter-dir <本章目录>`，
+    但履历实际躺在 <本章>/02_状态/ 下。state_tree 的路径解析早已兼容两种形状，只有
+    merge_chapter_state 的入参处理没兼容，照文档敲必报「章目录缺少 01_状态履历.md」。
+    """
+
+    def _run(self, novel, chapter_dir):
+        import subprocess
+        script = os.path.join(os.path.dirname(__file__), "..", "..",
+                              "01_小说通用工具", "merge_chapter_state.py")
+        return subprocess.run(
+            [sys.executable, os.path.abspath(script),
+             "--chapter-dir", chapter_dir, "--novel-dir", novel, "--dry-run"],
+            capture_output=True, text=True, timeout=120,
+        )
+
+    def test_accepts_both_chapter_root_and_state_subdir(self):
+        with tempfile.TemporaryDirectory() as td:
+            novel = make_novel(td, baseline_records=[
+                ["角色.苏砚", "内力值", "运算-数值", "100"],
+            ], chapters={
+                "03_第01部/03_卷01/03_章0001": [
+                    ["角色.苏砚", "内力值", "运算-数值", "-20", "1", "2026-01-01", "-"],
+                ],
+            })
+            chap_root = os.path.join(novel, "05_工作区", "03_第01部", "03_卷01", "03_章0001")
+
+            # 文档写法：本章目录本身
+            r1 = self._run(novel, chap_root)
+            self.assertEqual(r1.returncode, 0, f"本章目录形状应被接受，实际 stdout={r1.stdout} stderr={r1.stderr}")
+
+            # 既有写法：显式 02_状态 子目录，必须继续可用
+            r2 = self._run(novel, os.path.join(chap_root, "02_状态"))
+            self.assertEqual(r2.returncode, 0, f"02_状态 形状应继续可用，实际 stdout={r2.stdout} stderr={r2.stderr}")
+
+    def test_missing_changelog_still_errors(self):
+        with tempfile.TemporaryDirectory() as td:
+            novel = make_novel(td, baseline_records=[
+                ["角色.苏砚", "内力值", "运算-数值", "100"],
+            ])
+            empty = os.path.join(novel, "05_工作区", "03_第01部", "03_卷01", "03_章0009")
+            os.makedirs(empty, exist_ok=True)
+            r = self._run(novel, empty)
+            self.assertEqual(r.returncode, 1)
+            self.assertIn("01_状态履历.md", r.stdout + r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

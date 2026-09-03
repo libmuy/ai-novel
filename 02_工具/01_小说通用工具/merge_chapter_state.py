@@ -114,8 +114,18 @@ def main():
     chapter_dir = os.path.abspath(args.chapter_dir)
     target_cl = os.path.join(chapter_dir, CHANGELOG_FILENAME)
     if not os.path.isfile(target_cl):
-        print(f"错误: 章目录缺少 {CHANGELOG_FILENAME}: {chapter_dir}")
-        sys.exit(1)
+        # 文档（AGENTS.md / 技能 03_章节状态对账 / 本脚本 --help）一律写「--chapter-dir <本章目录>」，
+        # 而履历实际躺在 <本章>/02_状态/ 下。state_tree 的两处路径解析早已兼容这两种形状，
+        # 只有这里没兼容，导致照文档敲必然报「章目录缺少 01_状态履历.md」。此处补齐：
+        # 传本章目录时自动下探 02_状态/。
+        nested = os.path.join(chapter_dir, "02_状态", CHANGELOG_FILENAME)
+        if os.path.isfile(nested):
+            chapter_dir = os.path.join(chapter_dir, "02_状态")
+            target_cl = nested
+        else:
+            print(f"错误: 章目录缺少 {CHANGELOG_FILENAME}: {chapter_dir}"
+                  f"（也不在 {os.path.join(chapter_dir, '02_状态')}/ 下）")
+            sys.exit(1)
 
     novel_dir = os.path.abspath(args.novel_dir) if args.novel_dir else st.find_novel_dir(chapter_dir)
     if not novel_dir:
