@@ -1,0 +1,46 @@
+# 章节配音（tts_chapter.py）后端与音色配置。
+#
+# 用途：把已定稿的章节正文用 TTS 读成音频存档，供作者「听稿校对」。
+#       正文预处理只剥离场景分隔符 `※` 等标记，单一旁白音色，不做旁白/对白分轨。
+#
+# 后端（可插拔，backend 字段选一个）：
+#   edge    —— 微软 Edge 在线 TTS（edge-tts CLI）。免费、无需 key、中文旁白音色最好、
+#              直出 MP3、不需要 ffmpeg。缺点：需联网，正文文本会发往微软服务器。
+#              依赖：02_工具/.venv 里装 edge-tts（见 01_小说通用工具/tts/setup.sh）。
+#   openai  —— OpenAI 兼容 /v1/audio/speech 端点（供日后 ai-station.local 自建 TTS 服务）。
+#              纯 urllib、零 pip 依赖、全本地不外泄。缺点：要自己把服务搭起来。
+#   piper   —— Pi 本机离线（piper 二进制 + onnx 模型）。完全离线。缺点：中文音色单一、偏机械。
+#   auto    —— 先探测 [openai].base_url 主机可达 → openai；否则 edge-tts 可执行存在 → edge；
+#              都不行 → 退出码 2（不静默放行）。
+#
+# 付费端点才需要密钥：同目录 gitignore 的 tts.secret.toml（api_key = "..."），
+# 或环境变量（[openai].api_key_env 指定名）。
+
+backend = "edge"
+
+[edge]
+voice  = "zh-CN-YunxiNeural"   # 旁白男声（云希）。女声可用 zh-CN-XiaoxiaoNeural（晓晓）
+rate   = "+0%"                 # 语速，如 "-10%" / "+15%"
+volume = "+0%"
+pitch  = "+0Hz"
+
+[openai]
+base_url = "http://ai-station.local:8880/v1"
+model    = "kokoro"
+voice    = "zf_xiaobei"
+response_format = "mp3"
+api_key_required = false
+api_key_env = "OPENAI_API_KEY"
+timeout = 300
+
+[piper]
+model = ""                    # piper onnx 模型绝对路径；留空 = 未配置
+
+[output]
+per_scene = false             # true: 每场景一个 mp3 不拼接；false: 整章合并为一个
+format = "mp3"                # edge/openai 出 mp3；piper 出 wav（此项对 piper 无效）
+chunk_char_limit = 4000       # 单场景超过此字数再按段落切分后合成
+
+[run]
+edge_timeout = 180            # 单次 edge-tts 调用超时（秒）
+retry = 1                     # 单段合成失败后的重试次数
