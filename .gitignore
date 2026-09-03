@@ -21,3 +21,10 @@ TMP/
 
 # Claude Code 本地 worktree（fork 会话隔离用，勿入库）
 .claude/worktrees/
+
+# 章节配音（tts_chapter.py）——音频派生物不入库，manifest .json 保留
+02_工具/.venv/
+02_工具/00_系统级/tts.secret.toml
+**/03_音频/*.mp3
+**/03_音频/*.wav
+**/03_音频/*.m4a

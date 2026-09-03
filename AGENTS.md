@@ -129,4 +129,14 @@ LLM 客户端在 `02_工具/00_系统级/_llm.py`。
 | `new_novel.py` | `<小说名>` 脚手架新小说（算编号、拷骨架、建软链、填占位符）。无 LLM。见技能 `07_新建小说.md`。 |
 | `state_tree.py` / `_llm.py` / `llm.config.toml` | 共享库 / LLM 客户端（OpenAI 兼容 `/chat/completions`）/ 端点配置。当前指向本地 llama.cpp（`http://ai-station.local:8080/v1`，`api_key_required = false`，无密钥）；需鉴权的端点走环境变量或 gitignore 的 `llm.secret.toml`。 |
 
+### 8.3 章节配音 `02_工具/01_小说通用工具/tts_chapter.py`
+
+- **用途**：把一章**已定稿的正文**用 TTS 读成音频存档，供作者「听稿校对」。单一旁白音色；正文预处理只剥离场景分隔符 `※`（及 `＊`/`***`）、防御性去掉标题行/frontmatter/HTML 注释，中文标点原样保留。按场景分段合成、字节拼接为整章一个文件（`--per-scene` 则每场景一个）。
+- **可插拔后端**（`02_工具/00_系统级/tts.config.toml` 的 `backend` 字段）：`edge`（微软 Edge 在线 `edge-tts` CLI，默认，免费无 key、中文旁白音色最好、直出 MP3、不需 ffmpeg）∥ `openai`（OpenAI 兼容 `/v1/audio/speech`，纯 urllib，供日后 `ai-station.local` 自建 TTS 服务）∥ `piper`（Pi 本机离线）∥ `auto`（探测 openai 端点 → edge → 都不行退出码 2）。付费端点密钥走环境变量或 gitignore 的 `tts.secret.toml`（体例同 `llm.secret.toml`）。
+- **依赖**：`edge` 后端需在 `02_工具/.venv` 里装 `edge-tts`——一次性跑 `bash 02_工具/01_小说通用工具/tts/setup.sh`（系统无 pip 也行，用 venv+ensurepip）。`tts_chapter.py` 自动发现 `02_工具/.venv/bin/edge-tts`。`openai` 后端零 pip 依赖。
+- **用法**：`python3 02_工具/01_小说通用工具/tts_chapter.py --chapter-dir <章工作区目录> [--backend …] [--voice …] [--rate ±N%] [--per-scene] [--force] [--dry-run] [--format json|text]`。或 `--manuscript <正文.md> --out <输出.mp3>`。`--chapter-dir` 的部/卷/章解析与 canonical 正文定位复用 `review_manuscript.py` 那套。
+- **输出**：音频 `<章工作区>/03_音频/章{C:04d}.mp3` + manifest `<章工作区>/03_音频/章{C:04d}.json`（源 sha256 + 后端 + 音色 + 语速；用于幂等：源文本/参数未变则跳过，`--force` 强制重生成）。stdout 出结果 JSON。退出码 `0` 正常 / `1` 路径参数错 / `2` 后端不可用（不写文件、不静默放行）。
+- **使用时机**：某章正文在 `00_进度.md` 转「**定稿**」之后（不给草稿/冷读修订中间稿配音）。见技能 `00_通用模板/03_任务技能/02_小说级/09_章节配音.md`。
+- **局限**：`edge`/`openai` 在线后端会把正文文本发往对应服务器；字节拼接非母带级（够听稿）；多音字/生造术语（碎灵石/命灵痕…）读音暂不校正。`03_音频/` 里的 `.mp3` 已在 `.gitignore` 排除（manifest `.json` 入库留记录）。
+
 > 若将某本小说目录作为工作区根目录，以该小说目录中的 `AGENTS.md` 和 `00_通用模板/` 软链接为准。
