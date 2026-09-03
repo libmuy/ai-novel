@@ -26,6 +26,11 @@
 
 评审器池见 review.config.toml。两家外部评审器全不可用且 claude_subagent=false →
 退出码 3、不写文件（不静默放行）。
+
+成功评审器只覆盖 1 个家族（opencode / local_qwen / claude_subagent 去重计数）时，
+退出码仍是 0，但结果 JSON 带 `"degraded": "single_critic"`（未降级为 null），
+「校验记录」里也会追加一行醒目告警——"对抗性重读换一批模型"的设计意图打了折扣，
+不代表评审失败，只是提示人工复核要更谨慎。
 """
 import argparse
 import datetime as _dt
@@ -237,6 +242,14 @@ def _critic_qwen(prompt):
         return [], f"{type(e).__name__}: {e}"
 
 
+def _critic_family(used_entry: str) -> str:
+    """从 `used` 条目（如 'opencode/mimo·无参照' / 'local_qwen·带参照'）取评审器家族名。
+
+    注意：`used` 按「评审器 × 遍数」记条目，同一家族跑两遍会有两条 —— 家族数须去重统计，
+    不能直接拿 len(used) 当家族数用。"""
+    return used_entry.split("/")[0].split("·")[0]
+
+
 # ---------------------------------------------------------------- 确定性检查
 
 def _run_lexicon(novel_dir: Path, target: Path, mode: str):
@@ -354,6 +367,14 @@ def main():
     lexicon = _run_lexicon(novel_dir, Path(target), mode)
 
     external_ok = len(used) > 0
+
+    # 「成功的家族数」≠ len(used)：used 按「评审器 × 遍数」记条目，同一家族跑两遍会占两条。
+    # 家族 = opencode / local_qwen（去重）+ claude_subagent（若 requested，视为将另行覆盖的一族）。
+    families = {_critic_family(u) for u in used}
+    if subagent_requested:
+        families.add("claude_subagent")
+    degraded = len(families) < 2
+
     result = {
         "mode": mode,
         "target": str(Path(target).resolve().relative_to(novel_dir)),
@@ -364,6 +385,7 @@ def main():
         "lexicon": lexicon,
         "findings": findings,
         "finding_count": len(findings),
+        "degraded": "single_critic" if degraded else None,
     }
 
     if not external_ok and not subagent_requested:
@@ -388,6 +410,11 @@ def _append_record(path: Path, result: dict):
         lines.append(f"> 不可用：{'; '.join(result['critics_unavailable'])}")
     if result.get("claude_subagent_requested"):
         lines.append("> `claude_subagent_requested=true` — 待主 Agent 另 spawn 冷读 subagent")
+    if result.get("degraded") == "single_critic":
+        lines.append(
+            "> ⚠️ **降级（degraded=single_critic）**：本轮成功评审器只覆盖 1 个家族，"
+            "「换一批模型对抗性重读」的设计意图打了折扣，结论需人工格外审慎复核。"
+        )
     lines.append("")
     if result["lexicon"]:
         lines.append("**确定性·禁用词命中**")

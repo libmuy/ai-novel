@@ -3,16 +3,29 @@
 # 用途：merge_chapter_state.py 在某章改动描述类字段时，调用一次大模型把
 #       旧描述 + 新描述合并成不丢信息的一段文本（运算-数值/枚举/列表 仍纯 Python）。
 #
-# 端点须为 OpenAI 兼容的 /chat/completions（llama.cpp / DeepSeek / Moonshot /
-# OpenAI / 多数网关 / Anthropic 的 OpenAI 兼容端点均可）。
-#
-# 需要密钥的端点（api_key_required = true，默认）：密钥不写在本文件（本文件入库），二选一：
+# backend 三选一（默认 auto，体例同 tts_chapter.py 的 backend=edge|openai|piper|auto）：
+#   "http"     — 走下面的 base_url，OpenAI 兼容 /chat/completions
+#                （llama.cpp / DeepSeek / Moonshot / OpenAI / 多数网关 / Anthropic
+#                 的 OpenAI 兼容端点均可）。
+#   "opencode" — 不走网络端点，子进程调用本机 opencode CLI（opencode run --model …），
+#                免密钥；按 opencode_models 列表依次试，前一个超时/空输出/非零退出
+#                就试下一个，全部失败才报错。
+#   "auto"     — 先探测 base_url 的主机:端口，可达就用 http；不可达就自动降级到
+#                opencode（降级会在 stderr 打一行明确提示，例如
+#                "[_llm] ai-station.local:8080 不可达，降级到 opencode/mimo-v2.5-free"，
+#                不会静默切换）；两条路都走不通（端点不可达 且 本机没装 opencode CLI）
+#                才抛 LlmError，中止合并、不写文件。
+backend = "auto"
+
+# 需要密钥的 http 端点（api_key_required = true，默认）：密钥不写在本文件（本文件入库），二选一：
 #   1. 环境变量：export <api_key_env 指定的变量名>=sk-xxx
 #   2. 同目录 llm.secret.toml（已 gitignore）：api_key = "sk-xxx"
 #   优先级：环境变量 > llm.secret.toml
 # 本地无鉴权端点（llama.cpp server 等）：设 api_key_required = false，不发 Authorization 头。
+# 以上密钥逻辑只对 backend=http（或 auto 降级前的探测阶段用得上 http 分支时）生效，
+# opencode 后端本身不需要密钥。
 
-# —— 当前：本地 llama.cpp server（Qwen3 27B），无需密钥 ——
+# —— 当前：本地 llama.cpp server（Qwen3 27B），无需密钥；不可达时 backend=auto 自动降级 opencode ——
 base_url = "http://ai-station.local:8080/v1"
 model = "/srv/unsafe/models/llm/unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-Q4_K_M.gguf"
 api_key_required = false
@@ -20,3 +33,7 @@ api_key_env = "OPENAI_API_KEY"
 timeout = 120
 max_tokens = 4096
 temperature = 0.2
+
+# opencode 后端可选覆盖（缺省用 _llm.py 内置的免费模型列表，按顺序试）：
+# opencode_models = ["opencode/mimo-v2.5-free", "opencode/nemotron-3-ultra-free"]
+# opencode_timeout = 300

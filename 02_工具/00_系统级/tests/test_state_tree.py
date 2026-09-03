@@ -9,6 +9,7 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import state_tree as st
+import _llm
 from helpers import make_novel, write_table, StubLlm
 
 
@@ -371,6 +372,156 @@ class TestHoldingsReverseIndex(unittest.TestCase):
             # 派生文件不被 load_state_tree 当成状态
             recs = st.load_state_tree(latest)
             self.assertTrue(all(not r["object_id"].startswith("持有者") for r in recs))
+
+
+def _mk_cfg(**overrides):
+    base = dict(
+        base_url="http://ai-station.local:8080/v1",
+        model="m",
+        api_key=None,
+        api_key_env="OPENAI_API_KEY",
+        api_key_required=False,
+        backend="auto",
+    )
+    base.update(overrides)
+    return _llm.LlmConfig(**base)
+
+
+class TestLlmBackendResolve(unittest.TestCase):
+    """_resolve_backend: backend 固定值原样返回；auto 探测 base_url 决定 http/opencode。"""
+
+    def test_fixed_http(self):
+        cfg = _mk_cfg(backend="http")
+        self.assertEqual(_llm._resolve_backend(cfg), "http")
+
+    def test_fixed_opencode(self):
+        cfg = _mk_cfg(backend="opencode")
+        self.assertEqual(_llm._resolve_backend(cfg), "opencode")
+
+    def test_auto_probe_ok_uses_http(self):
+        cfg = _mk_cfg(backend="auto")
+        orig = _llm._probe_base_url
+        _llm._probe_base_url = lambda base_url, timeout=3.0: True
+        try:
+            self.assertEqual(_llm._resolve_backend(cfg), "http")
+        finally:
+            _llm._probe_base_url = orig
+
+    def test_auto_probe_fail_falls_back_to_opencode(self):
+        cfg = _mk_cfg(backend="auto")
+        orig_probe, orig_which = _llm._probe_base_url, _llm.shutil.which
+        _llm._probe_base_url = lambda base_url, timeout=3.0: False
+        _llm.shutil.which = lambda name: "/usr/bin/opencode"
+        try:
+            self.assertEqual(_llm._resolve_backend(cfg), "opencode")
+        finally:
+            _llm._probe_base_url = orig_probe
+            _llm.shutil.which = orig_which
+
+    def test_auto_probe_fail_and_no_opencode_raises(self):
+        cfg = _mk_cfg(backend="auto")
+        orig_probe, orig_which = _llm._probe_base_url, _llm.shutil.which
+        _llm._probe_base_url = lambda base_url, timeout=3.0: False
+        _llm.shutil.which = lambda name: None
+        try:
+            with self.assertRaises(_llm.LlmError):
+                _llm._resolve_backend(cfg)
+        finally:
+            _llm._probe_base_url = orig_probe
+            _llm.shutil.which = orig_which
+
+
+class TestOpencodeChat(unittest.TestCase):
+    """_opencode_chat: 按模型列表依次试，前一个失败/空输出则试下一个，全部失败抛 LlmError。"""
+
+    def test_first_model_success(self):
+        calls = []
+
+        def fake_run(cmd, capture_output, text, timeout):
+            calls.append(cmd)
+            class R:
+                returncode = 0
+                stdout = '{"ok":true}'
+                stderr = ""
+            return R()
+
+        orig = _llm.subprocess.run
+        _llm.subprocess.run = fake_run
+        try:
+            out = _llm._opencode_chat("sys", "usr", models=["a/m1", "a/m2"], timeout=5)
+        finally:
+            _llm.subprocess.run = orig
+        self.assertEqual(out, '{"ok":true}')
+        self.assertEqual(len(calls), 1)
+
+    def test_falls_back_on_empty_output(self):
+        seq = [
+            type("R", (), {"returncode": 0, "stdout": "", "stderr": "boom"})(),
+            type("R", (), {"returncode": 0, "stdout": "second", "stderr": ""})(),
+        ]
+
+        def fake_run(cmd, capture_output, text, timeout):
+            return seq.pop(0)
+
+        orig = _llm.subprocess.run
+        _llm.subprocess.run = fake_run
+        try:
+            out = _llm._opencode_chat("sys", "usr", models=["a/m1", "a/m2"], timeout=5)
+        finally:
+            _llm.subprocess.run = orig
+        self.assertEqual(out, "second")
+
+    def test_all_models_fail_raises(self):
+        def fake_run(cmd, capture_output, text, timeout):
+            class R:
+                returncode = 1
+                stdout = ""
+                stderr = "err"
+            return R()
+
+        orig = _llm.subprocess.run
+        _llm.subprocess.run = fake_run
+        try:
+            with self.assertRaises(_llm.LlmError):
+                _llm._opencode_chat("sys", "usr", models=["a/m1"], timeout=5)
+        finally:
+            _llm.subprocess.run = orig
+
+
+class TestChatDispatch(unittest.TestCase):
+    """chat() 按 _resolve_backend 结果分派到 _opencode_chat / _http_chat。"""
+
+    def test_dispatches_to_opencode(self):
+        cfg = _mk_cfg(backend="opencode")
+        orig = _llm._opencode_chat
+        called = {}
+
+        def fake(system, user, models=None, timeout=300):
+            called["hit"] = True
+            return "resp"
+
+        _llm._opencode_chat = fake
+        try:
+            self.assertEqual(_llm.chat(cfg, "s", "u"), "resp")
+        finally:
+            _llm._opencode_chat = orig
+        self.assertTrue(called.get("hit"))
+
+    def test_dispatches_to_http(self):
+        cfg = _mk_cfg(backend="http")
+        orig = _llm._http_chat
+        called = {}
+
+        def fake(cfg_, system, user):
+            called["hit"] = True
+            return "resp"
+
+        _llm._http_chat = fake
+        try:
+            self.assertEqual(_llm.chat(cfg, "s", "u"), "resp")
+        finally:
+            _llm._http_chat = orig
+        self.assertTrue(called.get("hit"))
 
 
 if __name__ == "__main__":

@@ -87,6 +87,80 @@ class TestAppendRecordPreservesContent(unittest.TestCase):
             self.assertIn("🔴 [不闭合]", out)
 
 
+class TestCriticFamily(unittest.TestCase):
+    def test_opencode_entry(self):
+        self.assertEqual(R._critic_family("opencode/mimo-v2.5-free·无参照"), "opencode")
+
+    def test_local_qwen_entry(self):
+        self.assertEqual(R._critic_family("local_qwen·带参照"), "local_qwen")
+
+    def test_two_passes_same_family(self):
+        used = ["opencode/mimo·无参照", "opencode/mimo·带参照"]
+        self.assertEqual({R._critic_family(u) for u in used}, {"opencode"})
+
+
+class TestDegradedSingleCritic(unittest.TestCase):
+    """成功家族数 < 2 时结果带 degraded=single_critic；≥2 家族时不降级。
+
+    直接跑 main() 需要真实 opencode/网络，这里改为核对 §「评审器池」段落里
+    与家族计数直接相关的逻辑：len(used)（家族×遍数）不能代表家族数，
+    必须去重成 family 集合。"""
+
+    def test_len_used_overcounts_family(self):
+        # 同一家族跑两遍（无参照/带参照）产生 2 条 used，但只 1 个家族。
+        used = ["opencode/mimo·无参照", "opencode/mimo·带参照"]
+        families = {R._critic_family(u) for u in used}
+        self.assertEqual(len(used), 2)
+        self.assertEqual(len(families), 1)  # 若误用 len(used) 当家族数会被判定为"不降级"，是错的
+
+    def test_single_family_is_degraded(self):
+        used = ["opencode/mimo·无参照", "opencode/mimo·带参照"]
+        families = {R._critic_family(u) for u in used}
+        self.assertTrue(len(families) < 2)
+
+    def test_two_families_not_degraded(self):
+        used = ["opencode/mimo·无参照", "local_qwen·无参照"]
+        families = {R._critic_family(u) for u in used}
+        self.assertFalse(len(families) < 2)
+
+    def test_claude_subagent_requested_counts_as_family(self):
+        used = ["opencode/mimo·无参照"]
+        families = {R._critic_family(u) for u in used}
+        families.add("claude_subagent")
+        self.assertFalse(len(families) < 2)
+
+
+class TestAppendRecordDegradedWarning(unittest.TestCase):
+    def test_degraded_line_present(self):
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "rec.md"
+            R._append_record(p, {
+                "mode": "manuscript", "passes": "both",
+                "critics_used": ["opencode/m·无参照", "opencode/m·带参照"],
+                "critics_unavailable": [],
+                "claude_subagent_requested": False,
+                "lexicon": [], "findings": [],
+                "degraded": "single_critic",
+            })
+            out = p.read_text(encoding="utf-8")
+            self.assertIn("degraded=single_critic", out)
+            self.assertIn("⚠️", out)
+
+    def test_no_warning_when_not_degraded(self):
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "rec.md"
+            R._append_record(p, {
+                "mode": "manuscript", "passes": "both",
+                "critics_used": ["opencode/m·无参照", "local_qwen·无参照"],
+                "critics_unavailable": [],
+                "claude_subagent_requested": False,
+                "lexicon": [], "findings": [],
+                "degraded": None,
+            })
+            out = p.read_text(encoding="utf-8")
+            self.assertNotIn("degraded=single_critic", out)
+
+
 class TestResolveTargetsChapterDir(unittest.TestCase):
     def _mk_novel(self, root: Path):
         for d in ["01_设定", "10_正文/01_第01部/01_卷01", "03_规划/01_第01部/01_卷01",
