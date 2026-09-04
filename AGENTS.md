@@ -71,6 +71,7 @@
 | `new_novel.py` | 脚手架新小说（算编号、拷骨架、建软链） | 技能 `07_新建小说.md` |
 | `tts_chapter.py` | 定稿正文转音频存档，供作者听稿校对 | 技能 `09_章节配音.md` |
 | `serve_audio.py` | 本地 HTTP 章节浏览/播放 + 播客 RSS | 技能 `09_章节配音.md` |
+| `state_lock.py` | 状态树写锁（W6.2）：三个写状态的工具独占 `02_状态/`，并发时拒绝而非静默覆盖 | 文件内注释 ＋ 技能 `03_章节状态对账.md` |
 | `state_tree.py` / `_llm.py` / `llm.config.toml` | 状态共享库 / LLM 客户端（`backend = http｜opencode｜auto`，配置端点不可达时自动降级 opencode）/ 端点配置 | 文件内注释 |
 | `99_一次性脚本_归档/` | 已完成的一次性迁移脚本，不再日常使用 | 该目录 `README.md` |
 

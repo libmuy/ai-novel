@@ -32,11 +32,21 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import state_tree as st  # noqa: E402
+from state_lock import acquire_until_exit, StateLockError  # noqa: E402
 from state_tree import records_diff, load_state_tree, StateMergeError, CHANGELOG_FILENAME  # noqa: E402
 from merge_chapter_state import _make_llm_resolver  # noqa: E402
 
 
 def main():
+    """入口。真正的重折在 _run() 里，外面接住写锁失败（W6.2）。"""
+    try:
+        return _run()
+    except StateLockError as e:
+        print(f"\n错误：{e}", file=sys.stderr)
+        sys.exit(3)
+
+
+def _run():
     ap = argparse.ArgumentParser(description="从基线全量重折 01_最新状态/")
     ap.add_argument("novel_dir", help="小说根目录")
     ap.add_argument("--dry-run", action="store_true", help="打印 diff 与计划，不写文件")
@@ -48,6 +58,10 @@ def main():
     novel_dir = os.path.abspath(args.novel_dir)
     baseline = st.baseline_dir(novel_dir)
     live = st.latest_state_dir(novel_dir)
+
+    # W6.2 写锁：整个「读全量 → 算 → 全量重写」都在锁内；拿不到就中止、不写文件。
+    if not args.dry_run:
+        acquire_until_exit(os.path.dirname(live.rstrip("/")), tool="rebuild_global_state.py")
     tools_dir = os.path.dirname(os.path.abspath(__file__))
 
     if not os.path.isdir(baseline):

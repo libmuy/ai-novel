@@ -7,6 +7,9 @@ import tempfile
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+# build_state_snapshot 在 01_小说通用工具/ 下。不自己加这条路径的话，本文件只有在
+# 别的测试文件先跑过（顺带把它插进 sys.path）时才通过——单独跑就 ModuleNotFoundError。
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "01_小说通用工具"))
 
 import state_tree as st
 import _llm

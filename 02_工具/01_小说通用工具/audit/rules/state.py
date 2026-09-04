@@ -133,8 +133,45 @@ class StateRule(AuditRule):
             self._check_cascade_terminal_conflicts(context, novel_dir, stmod, findings)
             self._check_stale_descriptive_merge(context, novel_dir, stmod, findings)
             self._check_chapter_opener_drift(context, novel_dir, stmod, findings)
+            self._check_manifest_fingerprints(context, novel_dir, stmod, findings)
 
         return findings
+
+    def _check_manifest_fingerprints(self, context: AuditContext, novel_dir: Path,
+                                     stmod: Any, findings: list):
+        """W6.1 三方指纹核对：基线 / 已折叠履历 / 最新状态，任一方被手改就报。
+
+        与 `state_drift` 互补：drift 靠**重算折叠**判断，而重算「描述」类字段要 LLM
+        合并结果；指纹是无 LLM 依赖的篡改信号，而且直接指出是三方里的哪一方动了。
+        """
+        verify = getattr(stmod, "verify_manifest_fingerprints", None)
+        if verify is None:
+            return
+        try:
+            bad = verify(str(novel_dir))
+        except Exception:                       # noqa: BLE001 —— 核对失败不该拖垮整轮审查
+            return
+        if bad is None:
+            findings.append(Finding(
+                severity=Severity.INFO, rule=self.name, code="STATE025",
+                message="同步状态 manifest 没有三方指纹字段（W6.1 之前生成的旧文件），无从核对",
+                file="05_工作区/02_状态/01_最新状态/00_同步状态.md",
+                suggestion="跑一次 `merge_chapter_state.py` 或 `rebuild_global_state.py` 补齐指纹",
+                category="05_工作区",
+                locations=["05_工作区/02_状态/01_最新状态/00_同步状态.md"]))
+            return
+        if not bad:
+            return
+        findings.append(Finding(
+            severity=Severity.ERROR, rule=self.name, code="STATE025",
+            message=f"状态三方指纹有 {len(bad)} 方与 manifest 记录不符——上次折叠之后被手改过",
+            file="05_工作区/02_状态/01_最新状态/00_同步状态.md",
+            suggestion=("基线被改 → 基线是冻结的，改它要走 `08_基线状态初始化.md`，改完必须 "
+                        "`rebuild_global_state.py` 全量重折；"
+                        "履历被改 → 跑 `rebuild_global_state.py` 重折；"
+                        "最新状态被改 → 它是脚本覆盖写入的派生存储，手改一律作废，重折即可"),
+            category="05_工作区",
+            locations=[f"{k}：manifest 记 {rec}，实算 {act}" for k, rec, act in bad]))
 
     def _check_chapter_opener_drift(self, context: AuditContext, novel_dir: Path, stmod: Any, findings: list):
         """00_开篇状态.md（派生视图）与「基线 ⊕ 早于本章的履历、按细纲出场对象裁剪」的重算结果不符

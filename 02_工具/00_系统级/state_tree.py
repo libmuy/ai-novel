@@ -822,12 +822,69 @@ def render_category_index(category, obj_paths, obj_counts, folded_chapter):
     return "\n".join(lines)
 
 
-def render_manifest(folded_chapter, tool, n_objects, n_records):
+def _sha(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
+def tree_fingerprint(tree_dir, exclude_names=()):
+    """一棵状态树（基线 / 最新状态）的内容指纹。W6.1
+
+    对目录下全部 `*.md` 取 (相对路径, 内容 sha) 排序后再哈希。目录不存在返回 `__none__`。
+    `exclude_names` 用来排掉 manifest 自身——它要写进 manifest，不能自己哈希自己。
+    """
+    if not os.path.isdir(tree_dir):
+        return NONE_MARKER
+    parts = []
+    for root, dirs, files in os.walk(tree_dir):
+        dirs.sort()
+        for fn in sorted(files):
+            if not fn.endswith(".md") or fn in exclude_names:
+                continue
+            ap = os.path.join(root, fn)
+            rel = os.path.relpath(ap, tree_dir).replace(os.sep, "/")
+            try:
+                with open(ap, encoding="utf-8") as fh:
+                    parts.append(f"{rel}\t{_sha(fh.read())}")
+            except OSError:
+                parts.append(f"{rel}\t<unreadable>")
+    return _sha("\n".join(parts))
+
+
+def changelog_fingerprint(novel_dir, folded_chapter):
+    """已折叠进最新状态的那批 `01_状态履历.md` 的集合指纹。W6.1
+
+    只覆盖 `folded_chapter` 及之前的章——后面尚未折叠的章本就不该影响最新状态。
+    """
+    if not novel_dir or not folded_chapter or folded_chapter == NONE_MARKER:
+        return NONE_MARKER
+    parts = []
+    for path in iter_workspace_changelogs(novel_dir):
+        name = chapter_rel_name(path, novel_dir)
+        try:
+            with open(path, encoding="utf-8") as fh:
+                parts.append(f"{name}\t{_sha(fh.read())}")
+        except OSError:
+            parts.append(f"{name}\t<unreadable>")
+        if name == folded_chapter:
+            break
+    return _sha("\n".join(parts))
+
+
+def render_manifest(folded_chapter, tool, n_objects, n_records,
+                    baseline_sha=None, changelog_sha=None, latest_sha=None):
+    """同步状态 manifest。W6.1 起额外记录三方指纹。
+
+    三方 = 基线树 / 已折叠履历集合 / 最新状态树。`01_最新状态 == 基线 ⊕ 履历折叠`
+    这条不变式此前只有 `state_drift` 守着，而重算折叠需要「描述」类字段的 LLM 合并结果；
+    指纹是**无 LLM 依赖**的篡改信号，而且能直接指出是三方里的哪一方被动过。
+    """
     now = datetime.now(timezone.utc).isoformat()
     return "\n".join([
         "# 05_工作区/02_状态/01_最新状态 · 同步状态",
         "",
         "> 由状态脚本自动写入，供人工查看与审计参考，非权威数据。",
+        "> 三方指纹供 `audit_consistency.py` 的 `STATE025` 校验：任一方与记录不符，"
+        "说明它在上次折叠之后被手改过。",
         "",
         f"- 折叠至章: {folded_chapter or NONE_MARKER}",
         "- 基线: 05_工作区/02_状态/00_基线状态/",
@@ -835,6 +892,9 @@ def render_manifest(folded_chapter, tool, n_objects, n_records):
         f"- 最后运行时间: {now}",
         f"- 对象总数: {n_objects}",
         f"- 记录总数: {n_records}",
+        f"- 基线指纹: {baseline_sha or NONE_MARKER}",
+        f"- 履历指纹: {changelog_sha or NONE_MARKER}",
+        f"- 最新状态指纹: {latest_sha or NONE_MARKER}",
         "",
     ])
 
@@ -879,6 +939,40 @@ def render_holdings_reverse_index(records, folded_chapter=None):
     return "\n".join(lines)
 
 
+def parse_manifest_fields(state_dir):
+    """读 manifest 的 `- 键: 值` 为 dict。文件不存在返回 {}。"""
+    path = os.path.join(state_dir, MANIFEST_FILENAME)
+    out = {}
+    if not os.path.exists(path):
+        return out
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            m = re.match(r"^-\s*([^:：]+)[:：]\s*(.*?)\s*$", line)
+            if m:
+                out[m.group(1).strip()] = m.group(2).strip()
+    return out
+
+
+def verify_manifest_fingerprints(novel_dir):
+    """三方指纹核对（W6.1）。返回 [(方名, 记录值, 实算值), …]，空列表 = 一致。
+
+    manifest 里没有指纹字段（W6.1 之前写的老 manifest）时返回 `None`，
+    表示「无从核对」——调用方应提示重跑一次合并来补齐，而不是报错。
+    """
+    state_dir = latest_state_dir(novel_dir)
+    fields = parse_manifest_fields(state_dir)
+    if not fields or "基线指纹" not in fields:
+        return None
+    folded = fields.get("折叠至章", NONE_MARKER)
+    expect = {
+        "基线": (fields.get("基线指纹"), tree_fingerprint(baseline_dir(novel_dir))),
+        "履历": (fields.get("履历指纹"), changelog_fingerprint(novel_dir, folded)),
+        "最新状态": (fields.get("最新状态指纹"),
+                 tree_fingerprint(state_dir, exclude_names={MANIFEST_FILENAME})),
+    }
+    return [(k, rec, act) for k, (rec, act) in expect.items() if rec != act]
+
+
 def parse_manifest_folded_chapter(state_dir):
     """读 00_同步状态.md 的「折叠至章」；无文件或无该行返回 None。"""
     path = os.path.join(state_dir, MANIFEST_FILENAME)
@@ -891,7 +985,7 @@ def parse_manifest_folded_chapter(state_dir):
 
 
 def write_state_tree(state_dir, records, *, folded_chapter=None, tool="state_tree.py",
-                     prune=True, manifest=True, note=OBJECT_NOTE):
+                     prune=True, manifest=True, note=OBJECT_NOTE, novel_dir=None):
     """
     把 records 写成 05_工作区/02_状态/01_最新状态/ 的对象树：逐对象文件原子写、重建类目索引、
     可选写 manifest、可选 prune 掉不再存在的对象文件与空类目目录。
@@ -960,14 +1054,21 @@ def write_state_tree(state_dir, records, *, folded_chapter=None, tool="state_tre
                 logs.append(f"prune 空类目目录 {cat}/")
 
     if manifest:
-        _atomic_write(
-            os.path.join(state_dir, MANIFEST_FILENAME),
-            render_manifest(folded_chapter, tool, len(by_obj), len(records)),
-        )
-        # 持有物品反查（派生视图，仅在权威最新状态树生成）
+        # 持有物品反查（派生视图，仅在权威最新状态树生成）。
+        # 必须**先于** manifest 写：manifest 要把它算进「最新状态指纹」。
         _atomic_write(
             os.path.join(state_dir, HOLDINGS_REVERSE_FILENAME),
             render_holdings_reverse_index(records, folded_chapter),
+        )
+        nd = novel_dir or find_novel_dir(state_dir)
+        _atomic_write(
+            os.path.join(state_dir, MANIFEST_FILENAME),
+            render_manifest(
+                folded_chapter, tool, len(by_obj), len(records),
+                baseline_sha=tree_fingerprint(baseline_dir(nd)) if nd else None,
+                changelog_sha=changelog_fingerprint(nd, folded_chapter),
+                latest_sha=tree_fingerprint(state_dir, exclude_names={MANIFEST_FILENAME}),
+            ),
         )
 
     logs.append(f"写入 {len(by_obj)} 个对象文件 / {len(records)} 条记录 -> {state_dir}")

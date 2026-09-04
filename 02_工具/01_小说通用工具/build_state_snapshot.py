@@ -30,6 +30,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "00_系统级"))
 
 import state_tree as st  # noqa: E402
+from state_lock import acquire_until_exit, StateLockError  # noqa: E402
 from state_tree import render_md_table, StateMergeError, CHANGELOG_FILENAME  # noqa: E402
 
 
@@ -83,6 +84,15 @@ def write_chapter_openers(novel_dir, *, verbose=True):
 
 
 def main():
+    """入口。写模式在 _run() 里，外面接住写锁失败（W6.2）。"""
+    try:
+        return _run()
+    except StateLockError as e:
+        print(f"\n错误：{e}", file=sys.stderr)
+        sys.exit(3)
+
+
+def _run():
     ap = argparse.ArgumentParser(description="只读状态快照（从基线折叠履历，不调 LLM）")
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument("--volume-dir", help="卷目录：折叠到该卷最后一章（含）")
@@ -99,6 +109,10 @@ def main():
         if not nd:
             print("错误: 无法定位小说根目录")
             sys.exit(1)
+        # W6.2：--write-chapter-openers 会覆盖各章派生视图，同样要独占；
+        # 其余模式（打快照到 stdout/文件）是只读的，不加锁。
+        acquire_until_exit(os.path.join(nd, "05_工作区", "02_状态"),
+                           tool="build_state_snapshot.py --write-chapter-openers")
         w = write_chapter_openers(nd)
         print(f"共刷新 {len(w)} 个 00_开篇状态.md")
         return

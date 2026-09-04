@@ -40,6 +40,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "00_系统级"))
 
 import state_tree as st  # noqa: E402
+from state_lock import acquire_until_exit, StateLockError  # noqa: E402
 import _llm  # noqa: E402
 
 from state_tree import (  # noqa: E402,F401
@@ -87,6 +88,15 @@ def _make_llm_resolver(tools_dir):
 
 
 def main():
+    """入口。真正的合并在 _run() 里，外面套状态树写锁（W6.2）。"""
+    try:
+        return _run()
+    except StateLockError as e:
+        print(f"\n错误：{e}", file=sys.stderr)
+        sys.exit(3)
+
+
+def _run():
     ap = argparse.ArgumentParser(description="章级状态合并工具（把本章履历折叠进 01_最新状态/）")
     ap.add_argument("--chapter-dir", required=True, help="要并入 01_最新状态/ 的那一章目录")
     ap.add_argument("--novel-dir", help="小说根目录（缺省从 --chapter-dir 向上自动定位）")
@@ -134,6 +144,11 @@ def main():
 
     baseline = st.baseline_dir(novel_dir)
     live = st.latest_state_dir(novel_dir)
+
+    # W6.2 写锁：危险窗口是整个「读全量 → 算 → 全量重写」，不只是写那一下。
+    # 拿不到就中止，不写任何文件。
+    if not args.dry_run:
+        acquire_until_exit(os.path.dirname(live.rstrip("/")), tool="merge_chapter_state.py")
     if not os.path.isdir(baseline):
         print(f"错误: 冻结基线不存在: {baseline}\n"
               f"先用技能 08_基线状态初始化 生成基线（新书），或 migrate_state_layout.py 迁移（旧书）。")
