@@ -24,6 +24,7 @@
 | RULE005   | error   | §二·A 权威位置表点名的权威文件不存在                         |
 | RULE006   | warning | 同一段规范正文逐字出现在多个规则文件（§二·A 病根）            |
 | RULE007   | error   | 工具硬编码的数据路径在骨架和所有实有小说里都不存在（改名漏改）|
+| RULE008   | error   | 脚本派生的规则切片与按权威版重出的结果不一致（切片被手改）    |
 
 用法
 ----
@@ -33,6 +34,7 @@
 配置见同目录 `rules_audit.config.toml`。
 """
 import argparse
+import difflib
 import json
 import os
 import re
@@ -404,6 +406,48 @@ def check_tool_paths(repo_root, cfg) -> list[Finding]:
     )]
 
 
+# ---------------------------------------------------------------- RULE008 切片重出
+
+def check_slices(repo_root, cfg) -> list[Finding]:
+    """切片必须与「按权威版 slice 标记重出」的结果逐字一致。
+
+    RULE004 只查结构（切片多长出了章）；改字它拦不住——而历史上真实发生的
+    正是改字（校验版把「登记到伏笔登记表」抄成「登记到伏笔跟踪册」，
+    把读者指向了下游而非权威）。
+    """
+    if not cfg.get("slice", {}).get("enabled", False):
+        return []
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    try:
+        import build_rule_slices as brs
+    except ImportError:
+        return []
+    try:
+        rendered = brs.build(repo_root)
+    except Exception as e:
+        return [Finding(ERROR, "RULE008", f"规则切片无法重出：{e}", [],
+                        "跑 `02_工具/00_系统级/build_rule_slices.py --list` 看标记是否写对")]
+
+    stale = []
+    for name, content in rendered.items():
+        rel = brs.SLICES[name][0]
+        p = repo_root / rel
+        cur = p.read_text(encoding="utf-8") if p.exists() else ""
+        if cur != content:
+            n = sum(1 for _ in difflib.unified_diff(
+                cur.splitlines(), content.splitlines(), lineterm="", n=0))
+            stale.append(f"{rel}（{n} 行与重出结果不同）")
+    if not stale:
+        return []
+    return [Finding(
+        ERROR, "RULE008",
+        f"{len(stale)} 个派生切片与权威版不一致",
+        stale,
+        "跑 `02_工具/00_系统级/build_rule_slices.py --write` 重出；"
+        "要改规则请改权威版 `00_通用写作规则.md`，切片是派生物、不该手改",
+    )]
+
+
 # ---------------------------------------------------------------- 汇总输出
 
 CHECKS = {
@@ -414,6 +458,7 @@ CHECKS = {
     "RULE005": lambda rr, cfg, rf: check_authority_table(rr, cfg),
     "RULE006": lambda rr, cfg, rf: check_duplicate_text(rr, cfg, rf),
     "RULE007": lambda rr, cfg, rf: check_tool_paths(rr, cfg),
+    "RULE008": lambda rr, cfg, rf: check_slices(rr, cfg),
 }
 
 
