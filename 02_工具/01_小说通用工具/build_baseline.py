@@ -33,8 +33,26 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 import state_tree  # noqa: E402
 
 
-PROTAGONIST_ID = "角色.苏砚"  # 01_设定/00_主角档案.md
 PROTAGONIST_CARD = os.path.join("01_设定", "00_主角档案.md")
+
+# 主角卡【基础档案】表：| 姓名 | (必) | 苏砚 |。跨小说通用工具不写死任何一本书的主角名。
+_PROT_NAME_ROW_RE = re.compile(r"^\|\s*姓名\s*\|[^|]*\|\s*([^|]+?)\s*\|")
+
+
+def protagonist_id(novel_dir):
+    """从主角档案推导 `角色.<主角姓名>`；解析不到返回 None。"""
+    path = os.path.join(novel_dir, PROTAGONIST_CARD)
+    if not os.path.exists(path):
+        return None
+    with open(path, encoding="utf-8", errors="ignore") as fh:
+        for line in fh:
+            m = _PROT_NAME_ROW_RE.match(line.strip())
+            if m:
+                name = m.group(1).strip()
+                if name and name not in ("本名", "-", "\u2014"):
+                    return "角色." + name
+                break
+    return None
 
 # (卡片目录, 文件名前缀, 对象ID前缀)
 CARD_SOURCES = [
@@ -126,7 +144,12 @@ def collect(novel_dir):
         else:
             report["objects_all_blank"].append(obj_id)
 
-    handle_card(PROTAGONIST_CARD, PROTAGONIST_ID)
+    prot_id = protagonist_id(novel_dir)
+    if prot_id:
+        handle_card(PROTAGONIST_CARD, prot_id)
+    else:
+        report.setdefault("warnings", []).append(
+            "未能从 01_设定/00_主角档案.md【基础档案】表解析出「姓名」，主角未纳入基线候选")
 
     for card_dir, prefix, id_prefix in CARD_SOURCES:
         abs_dir = os.path.join(novel_dir, card_dir)

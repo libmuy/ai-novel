@@ -7,6 +7,7 @@ from typing import List
 from ..models import Finding, Severity
 from ..engine import AuditRule
 from ..context import AuditContext
+from ..novel_meta import world_files
 
 
 class GeographyRule(AuditRule):
@@ -24,11 +25,15 @@ class GeographyRule(AuditRule):
         for f in geo_dir.glob("*.md"):
             geo_files[f.name] = f
 
-        world_file = geo_dir / "02_地理区域_苍玄界.md"
-        if world_file.exists():
-            world_fi = context.file_map.get("02_数据库/02_地理区域/02_地理区域_苍玄界.md")
+        # 世界层文件从数据推导，不写死任何一本小说的世界名（跨小说通用，见 novel_meta.py）
+        for world_fname in world_files(context):
+            world_file = geo_dir / world_fname
+            if not world_file.exists():
+                continue
+            world_rel = f"02_数据库/02_地理区域/{world_fname}"
+            world_fi = context.file_map.get(world_rel)
             world_text = world_fi.content if world_fi else world_file.read_text(encoding="utf-8", errors="ignore")
-            prefix = "02_地理区域_苍玄界_"
+            prefix = world_fname[:-3] + "_"
 
             actual_regions = set()
             for fname in geo_files:
@@ -54,8 +59,8 @@ class GeographyRule(AuditRule):
                     severity=Severity.WARNING,
                     rule=self.name,
                     code="GEO001",
-                    message="区域文件存在但其名称未在世界总索引中出现",
-                    file="02_数据库/02_地理区域/02_地理区域_苍玄界.md",
+                    message=f"区域文件存在但其名称未在世界文件 {world_fname} 中出现",
+                    file=world_rel,
                     suggestion=f"在 {world_file.name} 中补充这些区域的描述条目",
                     category="02_地理区域",
                     locations=[f"02_地理区域/{f}" for f in sorted(missing_regions)]

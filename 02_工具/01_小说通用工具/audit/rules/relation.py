@@ -19,9 +19,9 @@ from typing import List, Set, Dict
 from ..models import Finding, Severity
 from ..engine import AuditRule
 from ..context import AuditContext
+from ..novel_meta import protagonist_name
 
-WHITELIST_REL = "05_工作区/02_状态/00_状态对象白名单.md"
-PROTAGONIST_NAME = "苏砚"
+WHITELIST_REL = "05_工作区/02_状态/03_状态对象白名单.md"
 STATE_TREES = [
     "05_工作区/02_状态/00_基线状态",
     "05_工作区/02_状态/01_最新状态",
@@ -73,7 +73,8 @@ class RelationRule(AuditRule):
         st = _load_state_tree_helpers()
 
         # ---- 已注册对象名（人物卡 stem + 主角 + 势力卡 stem + 白名单端名）----
-        char_names: Set[str] = {PROTAGONIST_NAME}
+        prot_name = protagonist_name(context)
+        char_names: Set[str] = {prot_name} if prot_name else set()
         fac_names: Set[str] = set()
         for fi in context.files:
             rel = fi.relative_path

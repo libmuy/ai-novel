@@ -6,7 +6,7 @@
 对齐：
 
 - STATE022 state_object_unregistered (error)：状态对象在对应数据库分类找不到同名卡片，
-  且不在 05_工作区/02_状态/00_状态对象白名单.md 里。
+  且不在 05_工作区/02_状态/03_状态对象白名单.md 里。
 - STATE023 state_field_undeclared (error)：状态字段未在该对象卡片的「## 动态字段清单」里声明。
 - STATE024 state_object_stateless (info)：卡片声明了动态字段清单、但对象从未进入任何状态
   （多数是尚未登场的对象，属正常；聚合成一条）。
@@ -19,9 +19,9 @@ from typing import List, Dict, Set
 from ..models import Finding, Severity
 from ..engine import AuditRule
 from ..context import AuditContext
+from ..novel_meta import protagonist_name
 
-PROTAGONIST_NAME = "苏砚"
-WHITELIST_REL = "05_工作区/02_状态/00_状态对象白名单.md"
+WHITELIST_REL = "05_工作区/02_状态/03_状态对象白名单.md"
 
 STATE_TREES = [
     "05_工作区/02_状态/00_基线状态",
@@ -102,8 +102,9 @@ class StateRegistryRule(AuditRule):
 
         # 主角
         prot = card_text("01_设定/00_主角档案.md")
-        if prot:
-            char_cards[PROTAGONIST_NAME] = _parse_dynamic_fields(prot)
+        prot_name = protagonist_name(context)
+        if prot and prot_name:
+            char_cards[prot_name] = _parse_dynamic_fields(prot)
 
         for fi in context.files:
             rel = fi.relative_path
@@ -184,7 +185,7 @@ class StateRegistryRule(AuditRule):
                 message=f"发现 {len(unregistered)} 处状态对象在数据库分类里找不到同名卡片",
                 file=None,
                 suggestion=("确认对象ID拼写；若确为群像/临时/背景对象，登记到 "
-                            "05_工作区/02_状态/00_状态对象白名单.md 放行"),
+                            "05_工作区/02_状态/03_状态对象白名单.md 放行"),
                 category="05_工作区", locations=unregistered,
             ))
         if undeclared:

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import List, Tuple, Optional
 from ..models import Reference, FileInfo
 from ..context import AuditContext
+from ..novel_meta import protagonist_name
 
 # @类型.名称 引用正则
 # 支持 @人物.苏砚, @势力.黑石会, @地名.枯港矿城, @类型.[TODO-xxx], @类型.[苏砚]
@@ -20,9 +21,9 @@ MD_LINK_PATTERN = re.compile(
     r"\[(?P<label>[^\]]*)\]\((?P<url>[^\s\)]+)\)"
 )
 
-KNOWN_EXTERNAL_ENTITIES = {
-    "人物": {"苏砚": "01_设定/00_主角档案.md"}
-}
+# 主角卡不在 02_数据库/07_人物/ 下（它在 01_设定/00_主角档案.md），实体索引扫不到，
+# 需要单独登记。主角姓名从主角档案推导，不写死任何一本小说的专名（见 novel_meta.py）。
+PROTAGONIST_CARD_REL = "01_设定/00_主角档案.md"
 
 # 非权威数据子树：生产过程归档 / 可重生成的提示词缓存 / 章级生产现场文件。
 # 这些文件里内联着历史副本与模板占位符样例，不参与 @引用 / Markdown 链接完整性校验
@@ -116,8 +117,8 @@ class ReferenceResolver:
             return
 
         # 校验 Known external entities
-        if ref.entity_type in KNOWN_EXTERNAL_ENTITIES and ref.entity_name in KNOWN_EXTERNAL_ENTITIES[ref.entity_type]:
-            ref.resolved_target = KNOWN_EXTERNAL_ENTITIES[ref.entity_type][ref.entity_name]
+        if ref.entity_type == "人物" and ref.entity_name == protagonist_name(self.context):
+            ref.resolved_target = PROTAGONIST_CARD_REL
             ref.status = "RESOLVED"
             return
 

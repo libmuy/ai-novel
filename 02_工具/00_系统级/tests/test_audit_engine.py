@@ -250,7 +250,7 @@ class TestAuditEngine(unittest.TestCase):
             encoding="utf-8",
         )
         if whitelist_rows is not None:
-            wl = self.novel_dir / "05_工作区" / "02_状态" / "00_状态对象白名单.md"
+            wl = self.novel_dir / "05_工作区" / "02_状态" / "03_状态对象白名单.md"
             wl.parent.mkdir(parents=True, exist_ok=True)
             lines = ["# 白名单\n", "| 对象ID | 类型 | 说明 |", "| --- | --- | --- |"]
             lines += [f"| {r} | — | test |" for r in whitelist_rows]
@@ -294,6 +294,70 @@ class TestAuditEngine(unittest.TestCase):
         ])
         self.assertNotIn("STATE022", found)
         self.assertNotIn("STATE023", found)
+
+    def test_state_registry_whitelist_legacy_name_not_honored(self):
+        """白名单文件曾从 00_ 改名为 03_（骨架模板与文档都是 03_）。
+        规则代码里的常量一度没跟着改，导致白名单静默失效——这里钉住正确文件名。"""
+        from audit.rules.state_registry import StateRegistryRule
+        found = self._setup_state_registry_novel(
+            [["角色.某矿工甲", "所在地", "描述", "枯港矿城"]])
+        self.assertIn("STATE022", found)   # 无白名单 → 报
+        legacy = self.novel_dir / "05_工作区" / "02_状态" / "00_状态对象白名单.md"
+        legacy.parent.mkdir(parents=True, exist_ok=True)
+        legacy.write_text("| 对象ID | 类型 | 说明 |\n| --- | --- | --- |\n"
+                          "| 角色.某矿工甲 | — | test |\n", encoding="utf-8")
+        again = {f.code: f for f in StateRegistryRule().run(AuditContext(self.novel_dir))}
+        self.assertIn("STATE022", again)   # 旧文件名不该被当白名单
+
+    # ---- 跨小说通用性：规则不得写死某本小说的主角名 / 世界名 ----
+
+    def _write_protagonist_card(self, name, dyn_fields=True):
+        card = self.novel_dir / "01_设定" / "00_主角档案.md"
+        card.parent.mkdir(parents=True, exist_ok=True)
+        body = (f"# 别的书 · 主角人设卡 · {name}\n\n## 基础档案\n\n"
+                "| 字段 | 必填 | 内容 |\n|------|------|------|\n"
+                f"| 姓名 | (必) | {name} |\n")
+        if dyn_fields:
+            body += ("\n## 动态字段清单\n\n| 字段 | 类型 | 基线初值 |\n|---|---|---|\n"
+                     "| 境界 | 运算-枚举 | 炼气一层 |\n")
+        card.write_text(body, encoding="utf-8")
+
+    def test_protagonist_name_derived_from_card(self):
+        from audit.novel_meta import protagonist_name
+        self._write_protagonist_card("云拾一")
+        self.assertEqual(protagonist_name(AuditContext(self.novel_dir)), "云拾一")
+
+    def test_state_registry_accepts_foreign_protagonist(self):
+        """换一本书（主角不叫苏砚），主角的状态行不得被判为「找不到卡片」。"""
+        from audit.rules.state_registry import StateRegistryRule
+        self._write_protagonist_card("云拾一")
+        ch_dir = self.novel_dir / "05_工作区" / "03_第01部" / "03_卷01" / "03_章0001" / "02_状态"
+        _write_changelog(str(ch_dir / "01_状态履历.md"),
+                         [["角色.云拾一", "境界", "运算-枚举", "炼气一层"]])
+        found = {f.code: f for f in StateRegistryRule().run(AuditContext(self.novel_dir))}
+        self.assertNotIn("STATE022", found)
+        self.assertNotIn("STATE023", found)
+
+    def test_protagonist_reference_resolves_for_foreign_novel(self):
+        """`@人物.[主角名]` 的卡片在 01_设定/ 下、实体索引扫不到，须由主角档案兜住。"""
+        from audit.rules.reference import ReferenceRule
+        self._write_protagonist_card("云拾一", dyn_fields=False)
+        d = self.novel_dir / "02_数据库" / "07_人物"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "07_人物.md").write_text("# 总索引\n\n主角 @人物.[云拾一] 见主角档案。\n",
+                                      encoding="utf-8")
+        findings = ReferenceRule().run(AuditContext(self.novel_dir))
+        self.assertNotIn("REF001", [f.code for f in findings])
+
+    def test_geography_checks_non_default_world(self):
+        """地理规则曾写死世界文件名「苍玄界」，换本书就整条规则静默空转。"""
+        geo = self.novel_dir / "02_数据库" / "02_地理区域"
+        geo.mkdir(parents=True, exist_ok=True)
+        (geo / "02_地理区域_northrealm.md").write_text(
+            "# 世界 · northrealm\n\n（区域索引忘了写）\n", encoding="utf-8")
+        (geo / "02_地理区域_northrealm_雪原.md").write_text("# 区域 · 雪原\n", encoding="utf-8")
+        found = {f.code: f for f in GeographyRule().run(AuditContext(self.novel_dir))}
+        self.assertIn("GEO001", found)
 
     # ---- W5 relation ----
 
