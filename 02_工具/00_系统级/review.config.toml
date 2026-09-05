@@ -21,7 +21,9 @@ local_qwen = "auto"
 
 # true 时脚本在输出 JSON 里置 claude_subagent_requested=true，由主 Agent spawn 一个
 # general-purpose subagent（只喂正文 + 冷读清单，不给主对话上下文 → 真冷读）。
-claude_subagent = true
+# 默认关（收费）：日常冷读只用 opencode + local_qwen 两路免费评审器；
+# 定稿前的关键节点、或规则变更后重开已完成章节这类场合，手动改回 true 加跑一轮再关回去。
+claude_subagent = false
 
 [run]
 # 单个 opencode 模型调用超时（秒）；免费档偶发服务器错，脚本会重试 1 次再回退下一个模型
