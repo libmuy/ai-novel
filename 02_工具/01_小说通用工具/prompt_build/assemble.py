@@ -117,6 +117,26 @@ class Ctx:
         return p.read_text(encoding="utf-8", errors="ignore")
 
 
+def _strip_template_framing(block: str) -> str:
+    """剥掉 `01_系统指令.md` 任务块自带的示例抬头。
+
+    模板里每个任务块形如：
+
+        【任务】写第X章正文
+        ## 执行要求
+        1. ...
+
+    「第X章」是占位符、「## 执行要求」与本脚本自己发的小节标题重复，两行都不该进产出。
+    """
+    lines = block.lstrip("\n").split("\n")
+    while lines and (
+        re.match(r"^【任务】.*第X章", lines[0].strip())
+        or lines[0].strip() == "## 执行要求"
+    ):
+        lines.pop(0)
+    return "\n".join(lines).strip("\n")
+
+
 def _retarget(text: str, mapping: dict[str, str]) -> str:
     """`01_系统指令` 里的模板文件名指代 → 本提示词内的内联区块标题。
 
@@ -260,6 +280,10 @@ def build_manuscript(ctx: Ctx) -> Prompt:
     # 只取围栏内的「给云端的指令」；围栏后的「拼装为云端提示词时……」是给本地
     # Agent 的操作说明（含仓库路径与脚本名），不发给云端。
     task2 = extract.fenced_block(extract.read_section(sysinst, "任务2：写单章正文"))
+    # 围栏内自带模板的示例抬头「【任务】写第X章正文」+「## 执行要求」。前者的「第X章」是
+    # 占位符（照抄会把未替换的 X 发给云端），后者与本段自己的「## 执行要求」小节标题重复。
+    # 两行都属于模板的自我框架，剥掉；真正的章次由本段标题与【已有数据】里的细纲交代。
+    task2 = _strip_template_framing(task2)
     task2 = _retarget(task2, {
         # 「按 07_单章细纲模板 的场景列表写作」指的是**本章那份细纲**，不是模板的字段说明
         "07_单章细纲模板": "【已有数据】的本章细纲",
@@ -282,10 +306,17 @@ def build_manuscript(ctx: Ctx) -> Prompt:
                 f"{TEMPLATES}/01_写作规则/00_通用写作规则_校验版.md")
     if 1 <= L.chapter <= 3:
         guide = ctx.tpl("01_写作规则/05_开篇三章设计指南.md")
-        contract = extract.read_section(guide, "六、开篇三章契约自检清单") or \
-            extract.read_section(guide, "六、契约自检清单")
-        s_check.add("开篇三章契约自检", contract,
-                    f"{TEMPLATES}/01_写作规则/05_开篇三章设计指南.md")
+        # 标题以指南实际写法为准；另两个是历史别名，留作兜底。
+        contract = (extract.read_section(guide, "六、三章整体契约自检清单")
+                    or extract.read_section(guide, "六、开篇三章契约自检清单")
+                    or extract.read_section(guide, "六、契约自检清单"))
+        if contract:
+            s_check.add("开篇三章契约自检", contract,
+                        f"{TEMPLATES}/01_写作规则/05_开篇三章设计指南.md")
+        else:
+            # Section.add 遇空内容会直接 return——不报待办的话，这里会静默少一段自检。
+            _todo(todos, "开篇三章契约自检清单没取到（指南的六级标题可能改名了）",
+                  "核对 05_开篇三章设计指南.md 的「## 六、…」标题并同步本处")
     s_check.add("脑补自检", "逐句检查——本段是否引入了细纲没有的东西？若有，删除或退回细纲层。\n",
                 "authored")
 
@@ -515,7 +546,10 @@ def _scene_budget_table(outline_text: str, todos: list[str]) -> str:
         m = re.search(r"(\d{2,4})\s*字", title + " " + body[:400])
         if m:
             words = m.group(1)
-        m2 = re.search(r"功能[：:]\s*([^\n，,）)]+)", title + " " + body[:400])
+        seg = title + " " + body[:400]
+        # 两种写法都要认：散文式「功能：铺垫」与表格行「| 场景功能 | 铺垫 |」
+        m2 = (re.search(r"功能[：:]\s*([^\n，,）)]+)", seg)
+              or re.search(r"\|\s*场景功能\s*\|\s*([^|\n]+?)\s*\|", seg))
         if m2:
             func = m2.group(1).strip()
         rows.append(f"| {title} | {words or '—'} | {func or '—'} |")
