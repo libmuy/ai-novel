@@ -24,6 +24,7 @@ from audit.rules.state import StateRule
 from audit.rules.reference import ReferenceRule
 from audit.rules.manuscript import ManuscriptRule
 from audit.rules.manuscript_lexicon import ManuscriptLexiconRule
+from audit.rules.outline_leak import OutlineLeakRule
 from audit.rules.planning import PlanningRule
 from audit.rules.setting import SettingRule
 from audit.rules.todo import TodoRule
@@ -62,6 +63,7 @@ def get_default_engine(novel_dir: Path) -> AuditEngine:
     engine.register_rule(ReferenceRule())
     engine.register_rule(ManuscriptRule())
     engine.register_rule(ManuscriptLexiconRule())
+    engine.register_rule(OutlineLeakRule())
     engine.register_rule(PlanningRule())
     engine.register_rule(SettingRule())
     engine.register_rule(TodoRule())

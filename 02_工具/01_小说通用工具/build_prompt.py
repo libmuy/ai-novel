@@ -153,6 +153,21 @@ def main() -> int:
     leaks = prompt.leaks()
     print("  " + leak.render_report(leaks).replace("\n", "\n  "))
 
+    # 细纲是逐字内联进【已有数据】的，同样会被模型转写成正文（规则第 6 条点名了
+    # 【已有数据】）。工具不改写作者数据，只报出来——源文件里的标识由作者去清。
+    src_leaks = prompt.source_leaks()
+    if src_leaks:
+        by_kind: dict[str, int] = {}
+        for lk in src_leaks:
+            by_kind[lk.kind] = by_kind.get(lk.kind, 0) + 1
+        head = "、".join(f"{k} {v} 处" for k, v in sorted(by_kind.items()))
+        print(f"  ⚠️ 内联细纲里有内部标识　{len(src_leaks)} 处（{head}）——"
+              f"模型会照抄进正文，请回改细纲源文件：")
+        for lk in src_leaks[:8]:
+            print(f"    第 {lk.line_no} 行「{lk.hit}」→ {lk.fix}")
+        if len(src_leaks) > 8:
+            print(f"    …另有 {len(src_leaks) - 8} 处")
+
     if args.dry_run:
         print("\n（--dry-run：未写任何文件）")
         return 3 if leaks else 0

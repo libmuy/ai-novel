@@ -35,6 +35,9 @@ class Block:
         return self.origin == "authored"
 
 
+_RE_OUTLINE_ORIGIN = re.compile(r"规划_卷\d+_章\d+\.md$")
+
+
 @dataclass
 class Section:
     title: str
@@ -82,6 +85,27 @@ class Prompt:
                 if b.authored:
                     out.append((sec.title, b))
         return [lk for title, b in out for lk in leak.scan(f"{title} · {b.title}", b.body)]
+
+    def source_leaks(self) -> list[leak.Leak]:
+        """扫**逐字内联的细纲**里的内部标识。
+
+        规则第 6 条点名【已有数据】也在禁区内，而细纲整段内联在【已有数据】里、
+        又是模型转写正文的主要依据——ch0003 首版正文出现「章0001」，源头就在这里。
+        本工具不改写源文件（那是作者的数据），只把命中项报出来让人去改源文件。
+        """
+        if not self.prose_output:
+            return []
+        out: list[leak.Leak] = []
+        for sec in self.sections:
+            for b in sec.blocks:
+                # 按**来源路径**认，不按标题关键字——【必读规则】里还内联着
+                # 「单章细纲字段说明」（模板本身），它的示例值带章号是正常的。
+                origin = b.origin or ""
+                if b.authored or origin.startswith("extract:") \
+                        or not _RE_OUTLINE_ORIGIN.search(origin):
+                    continue
+                out += leak.scan_source(f"{sec.title} · {b.title}", b.body)
+        return out
 
     def stats(self) -> dict:
         n_blocks = sum(len(s.blocks) for s in self.sections)

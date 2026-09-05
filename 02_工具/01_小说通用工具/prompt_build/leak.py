@@ -64,6 +64,56 @@ def scan(section_title: str, body: str) -> list[Leak]:
     return out
 
 
+# 细纲里属于「作者/操作台账」的小节：它们讲的是这一章怎么定的、自检过没有，
+# 不是给模型照着写的内容，跳过以免误报。
+SOURCE_META_HEADINGS = ("【待确认", "【已裁决", "【自检", "待确认清单", "自检确认", "自检预检")
+
+# 细纲模板的**结构字段**：这些格子里本来就该写对象 ID、伏笔号、场景号——它们是给
+# 本地 Agent 做状态对账用的台账，不是模型转写成正文的内容。只有叙述性字段
+# （场景内容简述／钩子／要点／感悟卡的文字）里出现内部标识才真会被抄进正文。
+SOURCE_META_ROW_FIELDS = {
+    "对象ID", "出场方式", "章节号", "本章类型", "预计总字数", "关联卷大纲节点",
+    "场景序号", "场景地点", "场景字数", "场景功能", "出场角色", "涉及资源", "涉及伏笔",
+    "章末钩子类型", "感悟触发场景", "本章落地道义", "古籍引用", "古籍点题",
+    "预估事件:感悟比例", "预估压抑/爽感", "新设定数量", "最终选择", "时间压力", "旁观者",
+}
+
+
+def _is_meta_row(line: str) -> bool:
+    """`| 涉及伏笔 | @伏笔.FH-067 |` 这类台账行——首格是结构字段名就跳过。"""
+    s = line.strip()
+    if not s.startswith("|"):
+        return False
+    cells = [c.strip().strip("*`") for c in s.strip("|").split("|")]
+    return bool(cells) and cells[0] in SOURCE_META_ROW_FIELDS
+
+
+def scan_source(section_title: str, body: str) -> list[Leak]:
+    """扫逐字内联的细纲。
+
+    与 `scan` 的差别：细纲是**作者的数据**，工具只报不改；且要跳过细纲末尾那些
+    面向操作者的台账小节（已裁决事项／自检清单等），它们不会被转写成正文。
+    """
+    out: list[Leak] = []
+    in_meta = False
+    in_cast = False
+    for i, line in enumerate(body.splitlines(), 1):
+        s = line.strip()
+        if s.startswith("#"):
+            in_meta = any(h in s for h in SOURCE_META_HEADINGS)
+            in_cast = "出场对象" in s          # 整张对象表都是台账
+            if i == 1:                        # 细纲自己的文档标题，不是叙述内容
+                continue
+        if in_meta or not s or s.startswith(("<!--", ">>>", "- [x]", "- [ ]")):
+            continue
+        if in_cast or _is_meta_row(line):
+            continue
+        for kind, pat, fix in PATTERNS:
+            for m in pat.finditer(line):
+                out.append(Leak(section_title, i, kind, m.group(0), line, fix))
+    return out
+
+
 def render_report(leaks: list[Leak]) -> str:
     if not leaks:
         return "内部标识泄漏自检：通过（本工具撰写的叙事指令段落中无仓库内部标识）。"
