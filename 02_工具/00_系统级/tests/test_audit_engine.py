@@ -573,6 +573,192 @@ class TestAuditEngine(unittest.TestCase):
         self.assertNotIn("STATE015", codes)
         self.assertNotIn("STATE016", codes)
 
+    # ---- db_chapter：数据库章节边界（§七 / §二·A）----
+
+    def _run_db_chapter(self, rel_path: str, body: str):
+        from audit.rules.db_chapter import DbChapterRule
+        p = self.novel_dir / rel_path
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(body, encoding="utf-8")
+        return {f.code: f for f in DbChapterRule().run(AuditContext(self.novel_dir))}
+
+    def test_db_chapter_flags_chapter_number(self):
+        found = self._run_db_chapter(
+            "02_数据库/07_人物/07_人物_屠铁砧.md",
+            "# 人物卡 · 屠铁砧\n\n| 预计退场方式 | 死亡。第24章被 @主角 反制 |\n")
+        self.assertIn("DBCHAP001", found)
+        self.assertIn("第24章", "".join(found["DBCHAP001"].locations))
+
+    def test_db_chapter_flags_scene_and_ch_forms(self):
+        found = self._run_db_chapter(
+            "02_数据库/04_资源/04_资源_法宝.md",
+            "# 资源 · 法宝\n\n| 使用条件 | 场景3 交予；卷1 ch25 器灵初醒 |\n")
+        self.assertIn("DBCHAP001", found)
+
+    def test_db_chapter_waiver_suppresses(self):
+        found = self._run_db_chapter(
+            "02_数据库/07_人物/07_人物_铁妞.md",
+            "# 人物卡 · 铁妞\n\n> 铁妞第2章才登场 <!-- DBCHAP-ok: 基线范围裁决依据 -->\n")
+        self.assertNotIn("DBCHAP001", found)
+
+    def test_db_chapter_clean_and_world_history_ok(self):
+        found = self._run_db_chapter(
+            "02_数据库/01_修炼体系/01_修炼体系_玄元道.md",
+            "# 体系 · 玄元道\n\n上古年间，万年前有大能立此道；关联 @伏笔.FH-004。\n")
+        self.assertNotIn("DBCHAP001", found)
+
+    def test_db_chapter_ignores_non_database_domains(self):
+        found = self._run_db_chapter(
+            "03_规划/01_第01部/01_卷01/规划_卷01.md",
+            "# 卷大纲\n\n| 第24章 | @主角 斩杀 @人物.[屠铁砧] | ... | 战斗 | 重钩 |\n")
+        self.assertNotIn("DBCHAP001", found)
+
+    # ---- redline：常驻红线包蒸馏视图守护（§二·A 第 3 类）----
+
+    _RL_SIX = ("## 六、禁用词（高频项摘录）\n\n"
+               "> 权威清单在 `01_设定/00_禁用词表.md`。\n\n"
+               "- **现代**：{words}\n\n")
+    _RL_EIGHT_2COL = ("## 八、刷新触发\n\n"
+                      "| 权威来源变更 | 重核本包 |\n|---|---|\n"
+                      "| `01_设定/00_文风.md` | 第四节 |\n")
+
+    def _redline_body(self, *, six_words="`系统`", eight=None, extra=""):
+        eight = self._RL_EIGHT_2COL if eight is None else eight
+        return ("# 测试 · 常驻红线包\n\n"
+                + self._RL_SIX.format(words=six_words)
+                + extra
+                + eight)
+
+    def _run_redline(self, body, *, lexicon=None, stamp=True, wenfeng="# 文风\n初版。\n"):
+        from audit.rules.redline import RedlineRule
+        import redline_stamp as rs
+        sd = self.novel_dir / "01_设定"
+        sd.mkdir(exist_ok=True)
+        (sd / "00_文风.md").write_text(wenfeng, encoding="utf-8")
+        if lexicon is not None:
+            (sd / "00_禁用词表.md").write_text(lexicon, encoding="utf-8")
+        (sd / "00_红线包.md").write_text(body, encoding="utf-8")
+        if stamp:
+            new_text, _ = rs.write_stamps(self.novel_dir)
+            (sd / "00_红线包.md").write_text(new_text, encoding="utf-8")
+        return {f.code: f for f in RedlineRule().run(AuditContext(self.novel_dir))}
+
+    def test_redline_absent_info(self):
+        from audit.rules.redline import RedlineRule
+        found = {f.code: f for f in RedlineRule().run(AuditContext(self.novel_dir))}
+        self.assertIn("REDLINE000", found)
+
+    def test_redline_stamp_match_clean(self):
+        found = self._run_redline(self._redline_body())
+        self.assertNotIn("REDLINE001", found)
+        self.assertNotIn("REDLINE003", found)
+
+    def test_redline_stamp_mismatch(self):
+        self._run_redline(self._redline_body())          # 落戳
+        (self.novel_dir / "01_设定" / "00_文风.md").write_text(
+            "# 文风\n改了一个字。\n", encoding="utf-8")
+        from audit.rules.redline import RedlineRule
+        found = {f.code: f for f in RedlineRule().run(AuditContext(self.novel_dir))}
+        self.assertIn("REDLINE001", found)
+
+    def test_redline_upstream_missing(self):
+        eight = ("## 八、刷新触发\n\n"
+                 "| 权威来源变更 | 重核本包 | 上次核对指纹 |\n|---|---|---|\n"
+                 "| `01_设定/00_主角档案_当前阶段.md` | 第一节 | deadbeefdeadbeef |\n")
+        found = self._run_redline(self._redline_body(eight=eight), stamp=False)
+        self.assertIn("REDLINE001", found)
+
+    def test_redline_no_stamp_column(self):
+        found = self._run_redline(self._redline_body(), stamp=False)
+        self.assertIn("REDLINE003", found)
+
+    def test_redline_section_eight_missing(self):
+        body = "# 测试 · 常驻红线包\n\n" + self._RL_SIX.format(words="`系统`")
+        found = self._run_redline(body, stamp=False)
+        self.assertIn("REDLINE003", found)
+
+    def test_redline_lexicon_word_not_in_list(self):
+        found = self._run_redline(
+            self._redline_body(six_words="`系统` `归档`"),
+            lexicon="## 包含\n系统   // 网文金手指词\n")
+        self.assertIn("REDLINE002", found)
+        self.assertIn("归档", found["REDLINE002"].message)
+
+    def test_redline_lexicon_word_pending(self):
+        found = self._run_redline(
+            self._redline_body(six_words="`系统` `公里`"),
+            lexicon="## 包含\n系统   // x\n\n## 待确认\n公里   // 距离单位\n")
+        codes = [f for f in [found.get("REDLINE002")] if f]
+        self.assertTrue(codes)
+        self.assertTrue(any("待确认" in f.message for f in codes))
+
+    def test_redline_lexicon_subset_ok(self):
+        found = self._run_redline(
+            self._redline_body(six_words="`系统`"),
+            lexicon="## 包含\n系统   // x\n")
+        self.assertNotIn("REDLINE002", found)
+
+    def test_redline_lexicon_bare_word_covered_by_regex(self):
+        # §六 写裸词「米」，词表用数字锚定正则拦——视为已覆盖，不报
+        found = self._run_redline(
+            self._redline_body(six_words="`米`"),
+            lexicon="## 正则\n[\\d一二三半几]\\s*米   // 数字+米\n")
+        self.assertNotIn("REDLINE002", found)
+
+    def test_redline_chapter_id_flagged(self):
+        found = self._run_redline(
+            self._redline_body(extra="- 主角在第14章后能力开启。\n\n"))
+        self.assertIn("REDLINE004", found)
+
+    def test_redline_chapter_id_waiver(self):
+        found = self._run_redline(self._redline_body(
+            extra="- 长周期第 10 章后才允许崩溃。 <!-- REDLINE-ok: 周期内序数 -->\n\n"))
+        self.assertNotIn("REDLINE004", found)
+
+    # ---- card_sections：出场对象卡区块守护（§二·A）----
+
+    _CARD_FULL = ("### 【基础档案】\n| 姓名 | X |\n\n### 【修行档案】\n境界。\n\n"
+                  "### 【角色内核】\n三要素。\n\n### 【与主角关系】\n远。\n\n"
+                  "### 【创作标签】\n口头禅。\n")
+
+    def _run_card_sections(self, cards: dict):
+        """cards: {文件名 stem: 卡片正文}。链入真 00_通用模板 以拿到真清单口径。"""
+        from audit.rules.card_sections import CardSectionsRule
+        repo_root = Path(__file__).resolve().parents[3]
+        link = self.novel_dir / "00_通用模板"
+        if not link.exists():
+            link.symlink_to(repo_root / "00_通用模板")
+        cdir = self.novel_dir / "02_数据库/07_人物"
+        cdir.mkdir(parents=True, exist_ok=True)
+        for stem, body in cards.items():
+            (cdir / f"07_人物_{stem}.md").write_text(body, encoding="utf-8")
+        return {f.code: f for f in CardSectionsRule().run(AuditContext(self.novel_dir))}
+
+    def test_card_sections_full_card_clean(self):
+        found = self._run_card_sections({"张三": self._CARD_FULL})
+        self.assertNotIn("CARDSEC001", found)
+
+    def test_card_sections_missing_block_flagged(self):
+        body = self._CARD_FULL.replace("### 【角色内核】", "### 【角色内核·三要素】")
+        found = self._run_card_sections({"李四": body})
+        self.assertIn("CARDSEC001", found)
+        self.assertIn("【角色内核】", "".join(found["CARDSEC001"].locations))
+
+    def test_card_sections_waiver_suppresses(self):
+        body = (self._CARD_FULL.replace("### 【角色内核】\n三要素。\n\n", "")
+                + "\n<!-- CARDSEC-ok: 【角色内核】 本卡是纯背景人物，无内核 -->\n")
+        found = self._run_card_sections({"王五": body})
+        self.assertNotIn("CARDSEC001", found)
+
+    def test_card_sections_no_manifest_no_findings(self):
+        """没链 00_通用模板 → 拿不到清单 → 不报（RULE009 那边的事）。"""
+        from audit.rules.card_sections import CardSectionsRule
+        cdir = self.novel_dir / "02_数据库/07_人物"
+        cdir.mkdir(parents=True, exist_ok=True)
+        (cdir / "07_人物_赵六.md").write_text("### 【基础档案】\n| 姓名 | X |\n", encoding="utf-8")
+        found = {f.code: f for f in CardSectionsRule().run(AuditContext(self.novel_dir))}
+        self.assertNotIn("CARDSEC001", found)
+
 
 if __name__ == "__main__":
     unittest.main()

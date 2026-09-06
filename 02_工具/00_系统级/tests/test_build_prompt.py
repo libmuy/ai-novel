@@ -236,6 +236,152 @@ class TestExtractSceneBlocks(unittest.TestCase):
         self.assertIn("内容2", scenes[1][1])
 
 
+class TestExtractReadSections(unittest.TestCase):
+    """extract.read_sections / sections_present —— 「区块被改名 → 静默丢失」是这批测试要锁死的契约。"""
+
+    SRC = """### 【基础档案】
+| 字段 | 内容 |
+| 姓名 | 张三 |
+
+### 【角色内核】
+三要素在此。
+
+### 【创作标签】
+标志性细节。
+"""
+
+    def test_all_present(self):
+        out = extract.read_sections(self.SRC, ["【基础档案】", "【角色内核】", "【创作标签】"])
+        self.assertIn("张三", out)
+        self.assertIn("三要素在此", out)
+        self.assertIn("标志性细节", out)
+
+    def test_partial_missing_is_silently_skipped(self):
+        """缺的节不报错、不占位——这正是需要上层用 sections_present 兜的行为。"""
+        out = extract.read_sections(self.SRC, ["【基础档案】", "【修行档案】", "【角色内核】"])
+        self.assertIn("张三", out)
+        self.assertIn("三要素在此", out)
+        self.assertNotIn("修行档案", out)
+
+    def test_all_missing_returns_empty(self):
+        self.assertEqual(extract.read_sections(self.SRC, ["【不存在】", "【也不存在】"]), "")
+
+    def test_sections_present_reports_hits_in_order(self):
+        present = extract.sections_present(
+            self.SRC, ["【创作标签】", "【修行档案】", "【基础档案】"])
+        self.assertEqual(present, ["【创作标签】", "【基础档案】"])
+
+    def test_sections_present_exact_match_only(self):
+        """带后缀的标题不算命中——与 read_section 的 `title == want` 一致。"""
+        src = "### 【角色内核】（三要素）\n内容\n"
+        self.assertEqual(extract.sections_present(src, ["【角色内核】"]), [])
+
+
+class TestExtractCardFields(unittest.TestCase):
+    """extract.card_fields / field_value —— 三列卡的「必填」列不得当值返回。"""
+
+    def test_two_column_card(self):
+        src = "| 字段 | 内容 |\n|---|---|\n| 所在地 | 枯港矿城 |\n"
+        self.assertEqual(extract.field_value(src, "所在地"), "枯港矿城")
+
+    def test_three_column_card_takes_content_column(self):
+        src = "| 字段 | 必填 | 内容 |\n|---|---|---|\n| 姓名 | (必) | 柳禾 |\n"
+        self.assertEqual(extract.field_value(src, "姓名"), "柳禾")
+
+    def test_three_column_card_empty_content_returns_empty_not_flag(self):
+        """内容列留空时，旧实现会回退返回 `(必)`——回归这个 bug。"""
+        src = "| 字段 | 必填 | 内容 |\n|---|---|---|\n| 姓名 | (必) |  |\n"
+        self.assertEqual(extract.field_value(src, "姓名"), "")
+
+    def test_field_not_found(self):
+        src = "| 字段 | 内容 |\n|---|---|\n| 姓名 | 柳禾 |\n"
+        self.assertEqual(extract.field_value(src, "外号"), "")
+
+    def test_card_fields_builds_table_and_drops_missing(self):
+        src = "| 字段 | 必填 | 内容 |\n|---|---|---|\n| 姓名 | (必) | 柳禾 |\n| 性别 | | 女 |\n"
+        out = extract.card_fields(src, ["姓名", "外号", "性别"])
+        self.assertIn("| 姓名 | 柳禾 |", out)
+        self.assertIn("| 性别 | 女 |", out)
+        self.assertNotIn("外号", out)
+
+
+class TestExtractSectionTitles(unittest.TestCase):
+    """extract.section_titles —— 只取 lv<=max_level；事件模板追加判定靠它。"""
+
+    def test_respects_max_level(self):
+        text = "# H1\n## H2\n### H3\n#### H4\n"
+        self.assertEqual(extract.section_titles(text, max_level=3), ["H1", "H2", "H3"])
+
+    def test_fence_aware(self):
+        text = "## 真标题\n```\n## 围栏内不是标题\n```\n"
+        self.assertEqual(extract.section_titles(text), ["真标题"])
+
+
+class TestExtractTableRows(unittest.TestCase):
+    """extract.table_rows —— 分隔行剔除；行首引用符让整表不可见。"""
+
+    def test_drops_separator_row(self):
+        rows = extract.table_rows("| a | b |\n|---|---|\n| 1 | 2 |\n")
+        self.assertEqual(rows, [["a", "b"], ["1", "2"]])
+
+    def test_blockquoted_table_is_invisible(self):
+        """`> |` 开头 → 整表取不到（已知脆性，锁死以便日后有意识地改）。"""
+        self.assertEqual(extract.table_rows("> | a | b |\n> | 1 | 2 |\n"), [])
+
+
+class TestExtractDyBlock(unittest.TestCase):
+    """extract.dy_block —— 标题必须含 DY-ID 才命中。"""
+
+    SRC = "### 道义条目 · DY-001\n正文一。\n\n### 道义条目 · DY-002\n正文二。\n"
+
+    def test_matches_when_id_in_heading(self):
+        self.assertIn("正文一", extract.dy_block(self.SRC, "DY-001"))
+        self.assertNotIn("正文二", extract.dy_block(self.SRC, "DY-001"))
+
+    def test_no_id_in_heading_returns_empty(self):
+        src = "### 道义条目一\n正文。\n"
+        self.assertEqual(extract.dy_block(src, "DY-001"), "")
+
+
+class TestExtractLedgerRows(unittest.TestCase):
+    """extract.ledger_rows —— 首列必须是裸 ID；加粗即漏。"""
+
+    def test_bare_id_matches(self):
+        src = "| FH-069 | 埋 | 第3章 |\n| FH-070 | 收 | 第9章 |\n"
+        rows = extract.ledger_rows(src, ["FH-069"])
+        self.assertEqual(len(rows), 1)
+        self.assertIn("FH-069", rows[0])
+
+    def test_bold_id_does_not_match(self):
+        src = "| **FH-069** | 埋 | 第3章 |\n"
+        self.assertEqual(extract.ledger_rows(src, ["FH-069"]), [])
+
+
+class TestExtractTailText(unittest.TestCase):
+    """extract.tail_text —— 剥标题与分隔线，取尾 N 字。"""
+
+    def test_strips_headings_and_rules(self):
+        text = "# 章标题\n正文第一段。\n---\n正文最后一段。\n"
+        out = extract.tail_text(text, chars=100)
+        self.assertNotIn("章标题", out)
+        self.assertNotIn("---", out)
+        self.assertIn("正文最后一段", out)
+
+    def test_truncates_to_tail(self):
+        text = "正文\n" + "甲乙丙丁" * 50
+        self.assertEqual(len(extract.tail_text(text, chars=20)), 20)
+
+
+class TestExtractWrRulesNoFilter(unittest.TestCase):
+    """extract.wr_rules(states=None) —— 用来判断「规则在、只是没一条命中状态」。"""
+
+    def test_none_returns_all_wr_rows(self):
+        text = ("## 【世界基本法则】\n\n| 规则ID | 名称 | 状态 | 内容 |\n|---|---|---|---|\n"
+                "| WR-001 | a | 硬 | x |\n| WR-002 | b | 软 | y |\n")
+        self.assertEqual(len(extract.wr_rules(text, states=None)), 2)
+        self.assertEqual(len(extract.wr_rules(text, ("硬",))), 1)
+
+
 class TestProgressIndex(unittest.TestCase):
     """progress.ProgressIndex 的测试。"""
 
@@ -581,6 +727,96 @@ class TestBuildPromptCLI(unittest.TestCase):
         # 不应该写出提示词存档
         archive = novel_dir / "05_工作区/03_第01部/03_卷01/03_章0001/00_提示词/01_正文生成.md"
         self.assertFalse(archive.exists())
+
+
+class TestManifest(unittest.TestCase):
+    """任务输入清单（manifest.py）与派生视图。"""
+
+    def setUp(self):
+        from prompt_build import manifest
+        self.manifest = manifest
+        self.repo_root = Path(__file__).resolve().parents[3]
+
+    def test_real_manifest_parses(self):
+        man = self.manifest.load(self.repo_root)
+        self.assertEqual(set(man.tasks), {"正文", "细纲"})
+        for t in man.tasks.values():
+            self.assertTrue(t.steps)
+            for st in t.steps:
+                self.assertIn(st.into, t.segments)
+
+    def test_bad_resolver_rejected(self):
+        toml = ('[task."正文"]\nsegments = ["a"]\n\n'
+                '[[task."正文".step]]\ninto = "a"\nsource = "resolver:不存在的"\nmode = "resolver"\n')
+        with self.assertRaises(self.manifest.ManifestError):
+            self.manifest.parse(toml)
+
+    def test_sections_mode_needs_sections(self):
+        toml = ('[task."正文"]\nsegments = ["a"]\n\n'
+                '[[task."正文".step]]\ninto = "a"\nsource = "tpl:x.md"\nmode = "sections"\n')
+        with self.assertRaises(self.manifest.ManifestError):
+            self.manifest.parse(toml)
+
+    def test_into_must_be_in_segments(self):
+        toml = ('[task."正文"]\nsegments = ["a"]\n\n'
+                '[[task."正文".step]]\ninto = "b"\nsource = "authored:no_invent"\nmode = "authored"\n')
+        with self.assertRaises(self.manifest.ManifestError):
+            self.manifest.parse(toml)
+
+    def test_derived_view_matches_toml(self):
+        import build_prompt_manifest as bpm
+        man = self.manifest.load(self.repo_root)
+        want = bpm.render(man)
+        have = (self.repo_root / bpm.VIEW_REL).read_text(encoding="utf-8")
+        self.assertEqual(have, want,
+                         "任务输入清单.md 与 TOML 不一致——跑 build_prompt_manifest.py --write")
+
+
+class TestManifestGolden(TestAssemble):
+    """清单驱动拼装的字节稳定性：合成 fixture 渲染出的提示词哈希锁定。
+
+    用 fixture（不用真实小说数据——后者随创作变）。改 assemble.py / 清单 / resolver
+    导致 fixture 渲染变化时本测试失败：若是无意的回归，查原因；若是有意的（Phase 2
+    瘦身），重跑本测试取新哈希填进 GOLDEN，并在提交信息里说明变了什么。
+    """
+
+    # Phase 1（清单驱动重构）落地时逐字节核对过 == 重构前。
+    # Phase 2（2026-09-06）正文清单收窄（fixture 是第 1 章，走 opening 分支）：
+    #   - 删 07_单章细纲模板 整份内联（写手用填好的细纲）
+    #   - 人物卡只取【基础/修行/内核/与主角关系/创作标签】五块（势力/地理卡仍整份）
+    #   - 开篇三章设计指南只取 一~五 节（去「使用范围」「七、适配说明」meta）
+    #   - 顺带修好：「六、契约自检清单」以前因标题名写错（找「六、开篇三章契约自检清单」、
+    #     实际是「六、三章整体契约自检清单」）从没被单独提取过——现在正确落进【输出后自检】，
+    #     不再靠整份内联夹带；ch1-3 提示词因此更贴规格。
+    # 合并 master 的 ch0003 分支（2026-09-06）后哈希再变：
+    #   - MANUSCRIPT：① _strip_template_framing 剥掉 task2 里模板自带的「【任务】写第X章」+
+    #     「## 执行要求」两行；② 00_通用写作规则_校验版 与 00_红线包/00_文风 加了 §6.3
+    #     「计谋/推演类内心活动限制」，随内联进【必读规则】/【输出后自检】。
+    #   - OUTLINE：00_通用写作规则_生成版 §6.3 随内联进【必读模板】。
+    GOLDEN_MANUSCRIPT = "7a90fbddc0e5ad01964c4634c7c589d1c5d44e7d1bd81ac9d24126e44d52c9e2"
+    GOLDEN_OUTLINE = "b4cf3410941f22507711b25f70b89abe42c6e7efab7c98b108dea572f1f3e280"
+
+    def _hash(self, text):
+        import hashlib
+        return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+    def test_manuscript_render_stable(self):
+        novel_dir, layout = self._make_novel_fixture()
+        ctx = assemble.Ctx(novel_dir=novel_dir, repo_root=self.repo_root,
+                           layout=layout, novel_name="小说")
+        h = self._hash(assemble.build_manuscript(ctx).render())
+        if self.GOLDEN_MANUSCRIPT == "8fb1b2f5c8d1e2a3":
+            self.skipTest(f"GOLDEN_MANUSCRIPT 未填，当前：{h}")
+        self.assertEqual(h, self.GOLDEN_MANUSCRIPT)
+
+    def test_outline_render_stable(self):
+        novel_dir, layout = self._make_novel_fixture()
+        ctx = assemble.Ctx(novel_dir=novel_dir, repo_root=self.repo_root,
+                           layout=layout, novel_name="小说")
+        h = self._hash(assemble.build_outline(ctx).render())
+        if self.GOLDEN_OUTLINE == "8fb1b2f5c8d1e2a3":
+            self.skipTest(f"GOLDEN_OUTLINE 未填，当前：{h}")
+        self.assertEqual(h, self.GOLDEN_OUTLINE)
 
 
 if __name__ == "__main__":

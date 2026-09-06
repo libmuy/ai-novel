@@ -1,0 +1,314 @@
+# 任务输入清单（机读权威）
+#
+# `00_系统架构规范.md` §二·A：每个事实一个权威位置。「某任务的云端提示词该内联哪些
+# 源文件、每个源文件整份还是取哪几节」这件事，此前散落在三处——`00_使用说明.md` 路由表
+# （散文）、`00_云端提示词生成器.md`「与正文阶段任务的关系」（散文）、`assemble.py`（代码）。
+# 已经漂过（路由表写「生成版」、脚本实际用红线包）。本文件是这件事的**唯一机读权威**：
+#
+#   - `build_prompt.py`（`prompt_build/assemble.py`）按本表拼装 `细纲` / `正文` 提示词。
+#   - `00_使用说明.md` 路由表相应两行改成指向本表的指针。
+#   - `build_prompt_manifest.py --write` 从本表派生人读视图 `任务输入清单.md`。
+#   - `audit_rules.py` 的 `RULE009` 校验：每个 source 解析得到、每个 sections/fields 名在
+#     对应模板里确实存在、派生视图与本表一致、路由表脚本行是指针。
+#
+# ── step 的字段 ────────────────────────────────────────────────
+#   into      必进哪个骨架段（不带方括号）
+#   source    "tpl:<相对 00_通用模板 的路径>" | "data:<相对小说目录的路径>" |
+#             "layout:<outline|opener_state|protagonist|volume_plan>" |
+#             "resolver:<名字>"（动态计算，逻辑在 assemble.py，白名单见 RULE009） |
+#             "authored:<名字>"（本工具撰写的固定文本）
+#   mode      "whole"（整份内联） | "sections"（只取 sections= 列出的标题节） |
+#             "fields"（只取 fields= 列出的字段行） | "resolver" | "authored"
+#   title     区块标题（resolver/authored 可省，由其自定）
+#   role      "rule" | "data" | "authored"（仅供人读视图分类）
+#   when      "always"（默认） | "opening"（仅第 1~3 章） | "has_redline" | "no_redline"
+#   sections  mode=sections 时，要取的标题名列表（按此顺序拼接，缺失的跳过）
+#   fields    mode=fields 时，要取的字段名列表
+#   note      给人读视图的一句说明
+#
+# 改内联粒度（Phase 2 的「瘦身」）＝改本文件对应 step 的 mode/sections，一行 diff，
+# 过 golden test + `audit_rules.py`。
+
+
+# ═══════════════════════════════════════════════════════════════ 单章细纲
+[task."细纲"]
+description = "写单章细纲（规划层产出，不是正文）"
+scripted    = "build_prompt.py --task 细纲"
+segments    = ["你的角色", "必读模板", "已有数据", "任务目标", "输出格式", "验收自检"]
+lettered    = ["已有数据"]
+
+[[task."细纲".step]]
+into = "你的角色"
+source = "authored:role_outline"
+title = "角色与纪律"
+mode = "authored"
+role = "authored"
+
+[[task."细纲".step]]
+into = "必读模板"
+source = "tpl:02_卡片模板/07_单章细纲模板.md"
+title = "单章细纲模板"
+mode = "whole"
+role = "rule"
+
+[[task."细纲".step]]
+into = "必读模板"
+source = "tpl:01_写作规则/00_通用写作规则_生成版.md"
+title = "通用写作规则（生成版）"
+mode = "whole"
+role = "rule"
+note = "细纲阶段只需「怎么写」切片；第八章自检清单属正文阶段"
+
+[[task."细纲".step]]
+into = "必读模板"
+source = "tpl:01_写作规则/05_开篇三章设计指南.md"
+title = "开篇三章设计指南"
+mode = "whole"
+role = "rule"
+when = "opening"
+
+[[task."细纲".step]]
+into = "必读模板"
+source = "resolver:event_templates_beat"
+mode = "resolver"
+role = "rule"
+note = "按本章节拍「必用模板/核心事件类型」列追加 ≤1 个事件模板"
+
+[[task."细纲".step]]
+into = "已有数据"
+source = "resolver:beat_block"
+title = "本卷大纲 · 本章节拍"
+mode = "resolver"
+role = "data"
+note = "节拍表本章行——摘要是本章事件归属的唯一权威"
+
+[[task."细纲".step]]
+into = "已有数据"
+source = "layout:protagonist"
+title = "主角档案"
+mode = "whole"
+role = "data"
+
+[[task."细纲".step]]
+into = "已有数据"
+source = "resolver:cast_cards_beat"
+mode = "resolver"
+role = "data"
+note = "出场对象 = 节拍表本章摘要里的全部 @引用（下限，细纲须据剧情补齐）"
+
+[[task."细纲".step]]
+into = "已有数据"
+source = "resolver:wr_hard_outline"
+title = "世界基本法则 · 硬规则清单"
+mode = "resolver"
+role = "data"
+
+[[task."细纲".step]]
+into = "已有数据"
+source = "resolver:dy_fh_beat"
+mode = "resolver"
+role = "data"
+
+[[task."细纲".step]]
+into = "已有数据"
+source = "resolver:sliding_window"
+title = "上下文滑动窗口"
+mode = "resolver"
+role = "data"
+
+[[task."细纲".step]]
+into = "已有数据"
+source = "resolver:opener_state_outline"
+title = "本章开篇状态"
+mode = "resolver"
+role = "data"
+
+[[task."细纲".step]]
+into = "任务目标"
+source = "authored:outline_task"
+title = "产出要求"
+mode = "authored"
+role = "authored"
+
+[[task."细纲".step]]
+into = "输出格式"
+source = "authored:outline_output_format"
+title = "按模板字段全量输出"
+mode = "authored"
+role = "authored"
+
+[[task."细纲".step]]
+into = "验收自检"
+source = "authored:outline_selfcheck"
+title = "自检清单"
+mode = "authored"
+role = "authored"
+
+
+# ═══════════════════════════════════════════════════════════════ 单章正文
+[task."正文"]
+description = "写单章正文"
+scripted    = "build_prompt.py --task 正文"
+segments    = ["你的角色", "必读规则", "已有数据", "任务", "输出格式", "输出后自检"]
+lettered    = ["已有数据"]
+
+[[task."正文".step]]
+into = "你的角色"
+source = "authored:role_manuscript"
+title = "角色与纪律"
+mode = "authored"
+role = "authored"
+
+[[task."正文".step]]
+into = "必读规则"
+source = "data:01_设定/00_红线包.md"
+title = "常驻红线包（本书逐章不变的约束，整段照办）"
+mode = "whole"
+role = "rule"
+when = "has_redline"
+note = "逐章不变约束的卷级蒸馏视图，打头件"
+
+[[task."正文".step]]
+into = "必读规则"
+source = "resolver:redline_fallback"
+mode = "resolver"
+role = "rule"
+when = "no_redline"
+note = "红线包未建时退回：生成版 + 文风逐份内联"
+
+[[task."正文".step]]
+into = "必读规则"
+source = "data:01_设定/00_禁用词表.md"
+title = "正文禁用词（完整清单，权威）"
+mode = "whole"
+role = "rule"
+note = "红线包 §六 只收高频摘录；云端读不到词表本体，故整份内联"
+
+[[task."正文".step]]
+into = "必读规则"
+source = "resolver:sysinst_common"
+title = "系统指令 · 通用"
+mode = "resolver"
+role = "rule"
+note = "01_系统指令.md 的「通用指令」+ 核心原则/文风红线/世界法则红线/版权人设红线"
+
+# 2026-09-06 Phase 2：正文不再内联 07_单章细纲模板（字段定义是给细纲作者的；写手拿到的是
+# 填好的细纲，模板结构在细纲里自明。01_系统指令 任务2 里对该模板名的指代由 task_directive
+# 的 _retarget 重定向到「本章细纲」，无悬空引用）。省 ~6.5 KB。细纲任务仍整份内联它。
+
+[[task."正文".step]]
+into = "必读规则"
+source = "resolver:event_templates_outline"
+mode = "resolver"
+role = "rule"
+note = "细纲里有【战斗结算要素】/【突破】等区块 → 追加对应事件模板"
+
+[[task."正文".step]]
+into = "必读规则"
+source = "tpl:01_写作规则/05_开篇三章设计指南.md"
+title = "开篇三章设计指南"
+mode = "sections"
+sections = [
+  "一、三章功能定位（不可互换）",
+  "二、前三章额外限制（在 00_通用写作规则 之上加严）",
+  "三、主角人设落地规则（开篇三章专用）",
+  "四、世界观展开节奏（三层冰山）",
+  "五、与后续章节的衔接规则",
+]
+role = "rule"
+when = "opening"
+note = "2026-09-06 Phase 2：去「使用范围」「七、适配说明」(meta) 与「六、契约自检清单」——后者已由 opening_contract resolver 单独内联进【输出后自检】，整份内联是重复。省 ~2.9 KB / ch1-3"
+
+[[task."正文".step]]
+into = "必读规则"
+source = "authored:no_invent"
+title = "禁脑补硬约束"
+mode = "authored"
+role = "rule"
+note = "逐字取自「示例去污染规则」第 6 条 + 「与正文阶段任务的关系」§6"
+
+[[task."正文".step]]
+into = "已有数据"
+source = "layout:opener_state"
+title = "本章开篇状态（派生视图，禁止在正文中改写这些初值）"
+mode = "whole"
+role = "data"
+
+[[task."正文".step]]
+into = "已有数据"
+source = "layout:outline"
+title = "本章细纲（逐场景执行，不跳过不合并）"
+mode = "whole"
+role = "data"
+
+[[task."正文".step]]
+into = "已有数据"
+source = "layout:protagonist"
+title = "主角档案"
+mode = "whole"
+role = "data"
+
+[[task."正文".step]]
+into = "已有数据"
+source = "resolver:cast_cards_outline"
+mode = "sections"
+sections = ["【基础档案】", "【修行档案】", "【角色内核】", "【与主角关系】", "【创作标签】"]
+role = "data"
+note = "出场对象卡（仅人物；势力/地理卡仍整份），取自细纲「## 出场对象」表。2026-09-06 Phase 2：去【独立故事线】(整条弧线/高光时刻/预计退场——跨章剧透，写本场用不到) 与「动态字段清单」(状态机基线，已在开篇状态里)；保留【创作标签】(说话风格/标志性细节，写对白要)。省 ~8 KB"
+
+[[task."正文".step]]
+into = "已有数据"
+source = "resolver:wr_hard_manuscript"
+title = "世界基本法则 · 硬规则清单"
+mode = "resolver"
+role = "data"
+
+[[task."正文".step]]
+into = "已有数据"
+source = "resolver:dy_fh_outline"
+mode = "resolver"
+role = "data"
+
+[[task."正文".step]]
+into = "任务"
+source = "resolver:task_directive"
+title = "执行要求"
+mode = "resolver"
+role = "authored"
+note = "逐字取自 01_系统指令.md 任务2 围栏内容，文件名指代改写为区块标题"
+
+[[task."正文".step]]
+into = "任务"
+source = "resolver:scene_budget"
+title = "本章场次与字数预算"
+mode = "resolver"
+role = "data"
+
+[[task."正文".step]]
+into = "输出格式"
+source = "authored:output_format_manuscript"
+title = "正文与附录"
+mode = "authored"
+role = "authored"
+
+[[task."正文".step]]
+into = "输出后自检"
+source = "tpl:01_写作规则/00_通用写作规则_校验版.md"
+title = "单章一站式自检清单"
+mode = "whole"
+role = "rule"
+
+[[task."正文".step]]
+into = "输出后自检"
+source = "resolver:opening_contract"
+title = "开篇三章契约自检"
+mode = "resolver"
+role = "rule"
+when = "opening"
+
+[[task."正文".step]]
+into = "输出后自检"
+source = "authored:noinvent_selfcheck"
+title = "脑补自检"
+mode = "authored"
+role = "authored"

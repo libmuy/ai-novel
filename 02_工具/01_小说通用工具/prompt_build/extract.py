@@ -90,6 +90,39 @@ def read_section(text: str, heading: str, include_heading: bool = True) -> str:
     return "\n".join(lines[start if include_heading else start + 1:]).rstrip() + "\n"
 
 
+def read_sections(text: str, headings: list[str], include_heading: bool = True) -> str:
+    """按 `headings` 列出的顺序取多节、拼接（缺失的节跳过）。
+
+    用于「对象卡只取本任务需要的区块」——每段仍是源文件某节的原文逐字，不概括。
+    取哪几节由 `00_通用模板/04_提示词/任务输入清单.toml` 声明、`RULE009` 校验节名在
+    **模板**里存在、`card_sections` 审计校验节名在**实际卡片**里存在。
+
+    「缺失的节跳过」是**刻意的静默**：调用方若要区分「取到几节 / 少了哪几节」，
+    先用 `sections_present` 拿到实际命中的清单，再决定要不要记 todo。
+    """
+    out = []
+    for h in headings:
+        sec = read_section(text, h, include_heading)
+        if sec.strip():
+            out.append(sec.rstrip())
+    return ("\n\n".join(out) + "\n") if out else ""
+
+
+def sections_present(text: str, headings: list[str]) -> list[str]:
+    """`headings` 中在 `text` 里确实存在且非空的那些（保持传入顺序）。
+
+    给拼装层用来把「区块被改名 / 漏填 → 静默消失」变成显式 todo：
+    `set(headings) - set(sections_present(...))` 就是丢掉的区块。
+    """
+    return [h for h in headings if read_section(text, h).strip()]
+
+
+def card_fields(text: str, fields: list[str]) -> str:
+    """卡片里 `fields` 列出的字段行 → 一张小表（原文取值，不概括）。"""
+    rows = [f"| {f} | {v} |" for f in fields if (v := field_value(text, f))]
+    return ("| 字段 | 值 |\n|---|---|\n" + "\n".join(rows) + "\n") if rows else ""
+
+
 def section_titles(text: str, max_level: int = 3) -> list[str]:
     return [t for _, lv, t in iter_headings(text) if lv <= max_level]
 
@@ -192,17 +225,20 @@ def card_path(novel_dir: Path, ref: Ref) -> Optional[Path]:
 
 # ── 具体字段 ───────────────────────────────────────────────────
 
-def wr_rules(concept_text: str, states: Iterable[str] = ("硬",)) -> list[str]:
-    """`00_小说概念.md`【世界基本法则】里指定状态的 WR 规则行（原文照抄）。"""
+def wr_rules(concept_text: str, states: Optional[Iterable[str]] = ("硬",)) -> list[str]:
+    """`00_小说概念.md`【世界基本法则】里的 WR 规则行（原文照抄）。
+
+    `states=None` → 不按状态过滤，返回全部 WR 行（用来判断「规则在、只是没一条命中状态」）。
+    """
     block = read_section(concept_text, "【世界基本法则】")
     if not block:
         return []
-    want = set(states)
+    want = None if states is None else set(states)
     out = []
     for cells in table_rows(block):
         if not cells or not cells[0].startswith("WR-"):
             continue
-        if len(cells) >= 3 and cells[2].strip() in want:
+        if want is None or (len(cells) >= 3 and cells[2].strip() in want):
             out.append("| " + " | ".join(cells) + " |")
     return out
 
@@ -228,12 +264,19 @@ def ledger_rows(text: str, ids: Iterable[str]) -> list[str]:
 
 
 def field_value(text: str, field: str) -> str:
-    """两列或三列表格里 `| <field> | <值> |` 的值（取最后一个非空单元格）。"""
+    """`| <field> | … |` 那一行的**值列**。
+
+    卡片有两种表宽：两列 `| 字段 | 值 |`、三列 `| 字段 | 必填 | 内容 |`
+    （人物卡 / 修炼卡）。三列取第 3 列，**不回退到「必填」列**——否则「内容」留空时
+    会把 `(必)` 之类的必填标记当成字段值返回。取到空就返回 ""，由上层记 todo。
+    """
     for cells in table_rows(text):
         if cells and cells[0].strip() == field:
-            for c in reversed(cells[1:]):
-                if c:
-                    return c
+            if len(cells) >= 3:
+                return cells[2]
+            if len(cells) == 2:
+                return cells[1]
+            return ""
     return ""
 
 

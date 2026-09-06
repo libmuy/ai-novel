@@ -36,6 +36,9 @@ from audit.rules.plan_beat import PlanBeatRule
 from audit.rules.workspace import WorkspaceRule
 from audit.rules.progress import ProgressRule
 from audit.rules.enum_domain import EnumDomainRule
+from audit.rules.db_chapter import DbChapterRule
+from audit.rules.redline import RedlineRule
+from audit.rules.card_sections import CardSectionsRule
 
 
 def load_field_vocab(novel_dir: Path):
@@ -75,6 +78,9 @@ def get_default_engine(novel_dir: Path) -> AuditEngine:
     engine.register_rule(WorkspaceRule())
     engine.register_rule(ProgressRule())
     engine.register_rule(EnumDomainRule())
+    engine.register_rule(DbChapterRule())
+    engine.register_rule(RedlineRule())
+    engine.register_rule(CardSectionsRule())
     return engine
 
 

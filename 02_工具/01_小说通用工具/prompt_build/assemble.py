@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from . import extract, leak
+from . import extract, leak, manifest
 from .layout import ChapterLayout, rel
 
 TEMPLATES = "00_通用模板"
@@ -216,94 +216,203 @@ def _header(ctx: Ctx, archive: Path, backfill: Path, target: Path,
 """
 
 
-# ─────────────────────────────────────────────────────────── 正文
+# ─────────────────────────────────────────────────────────── 清单驱动拼装
+#
+# 「某任务的提示词该内联哪些源、每个源整份还是取哪几节」的权威是
+# `00_通用模板/04_提示词/任务输入清单.toml`（`manifest.py` 读它）。下面的 build_* 只是
+# 按清单逐 step 分派：tpl/data/layout 直接取材，resolver 调对应函数（动态计算逻辑留这里），
+# authored 是本工具撰写的固定文本。改内联粒度＝改那份 TOML，不改本文件。
 
-def build_manuscript(ctx: Ctx) -> Prompt:
-    L = ctx.layout
-    todos: list[str] = []
-    outline_text = ctx.read_path(L.outline)
 
-    archive = L.prompt_dir / "01_正文生成.md"
-    backfill = L.output_dir / "01_正文生成.md"
+def _outline_text(ctx: Ctx, cache: dict) -> str:
+    if "outline_text" not in cache:
+        cache["outline_text"] = ctx.read_path(ctx.layout.outline)
+    return cache["outline_text"]
 
-    header = _header(
-        ctx, archive, backfill, L.manuscript, f"写《{ctx.novel_name}》本章正文",
-        "落位正文 → 按【输出格式】的【待登记清单】回填本章 `02_状态/01_状态履历.md` → "
-        "`merge_chapter_state.py --chapter-dir <本章目录>` → `audit_consistency.py` 复查 → "
-        "`review_manuscript.py --chapter-dir <本章目录>` 起冷读循环。")
 
-    # ── 【你的角色】
-    s_role = Section("【你的角色】")
-    s_role.add("角色与纪律", ROLE_MANUSCRIPT.format(novel=ctx.novel_name), "authored")
+def _sysinst_text(ctx: Ctx, cache: dict) -> str:
+    if "sysinst" not in cache:
+        cache["sysinst"] = ctx.tpl("01_写作规则/01_系统指令.md")
+    return cache["sysinst"]
 
-    # ── 【必读规则】：红线包打头，规则件全文内联
-    s_rules = Section("【必读规则】")
-    redline = ctx.data("01_设定/00_红线包.md")
-    if redline:
-        s_rules.add("常驻红线包（本书逐章不变的约束，整段照办）", redline, "01_设定/00_红线包.md")
-    else:
-        # 红线包未建 → 退回逐份摘抄的老做法（规格明确要求的降级路径）
-        todos.append("本书尚无 `01_设定/00_红线包.md`，已退回「逐份摘抄」老做法，建议补建")
-        for label, p in (("通用写作规则（生成版）", "01_写作规则/00_通用写作规则_生成版.md"),):
-            s_rules.add(label, ctx.tpl(p), f"{TEMPLATES}/{p}")
-        s_rules.add("本书文风差异", ctx.data("01_设定/00_文风.md"), "01_设定/00_文风.md")
 
-    # 禁用词表全文内联。红线包 §六 只收「高频项摘录」，正文里写着「冲突以禁用词表为准」——
-    # 但云端在零上下文里读不到那份表，这条指引对它是空的。表本身只有几 KB，
-    # 相对整份提示词可以忽略；不内联的代价是「事后由 LEXICON001 检出再返修」，
-    # 内联的收益是当场不写错。ch0002 通读新加的「油毡」就属于摘录没覆盖、
-    # 但下一章仍会踩的那一类。
-    lexicon = ctx.data("01_设定/00_禁用词表.md")
-    if lexicon:
-        s_rules.add("正文禁用词（完整清单，权威）", lexicon, "01_设定/00_禁用词表.md")
+def _beat(ctx: Ctx, cache: dict):
+    if "beat" not in cache:
+        cache["beat"] = _beat_row(ctx.read_path(ctx.layout.volume_plan), ctx.layout.chapter)
+    return cache["beat"]
 
-    sysinst = ctx.tpl("01_写作规则/01_系统指令.md")
+
+def _has_redline(ctx: Ctx) -> bool:
+    p = ctx.novel_dir / "01_设定/00_红线包.md"
+    try:
+        return p.is_file() and bool(p.read_text(encoding="utf-8", errors="ignore").strip())
+    except OSError:
+        return False
+
+
+def _when_ok(ctx: Ctx, step: manifest.Step) -> bool:
+    if step.when == "opening":
+        return 1 <= ctx.layout.chapter <= 3
+    if step.when == "has_redline":
+        return _has_redline(ctx)
+    if step.when == "no_redline":
+        return not _has_redline(ctx)
+    return True
+
+
+def _apply_mode(text: str, step: manifest.Step) -> str:
+    if not text:
+        return text
+    if step.mode == "sections":
+        return extract.read_sections(text, step.sections)
+    if step.mode == "fields":
+        return extract.card_fields(text, step.fields)
+    return text
+
+
+def _blocks_of(sec: Section) -> list[tuple[str, str, str]]:
+    """把一个临时 Section 的 block 摊平成 (title, body, origin) —— 供 resolver 复用
+    直接写 Section 的既有辅助函数（_add_cast_cards / _add_dy_and_fh）。"""
+    return [(b.title, b.body, b.origin) for b in sec.blocks]
+
+
+# ── authored：本工具撰写的固定文本，返回 (body, origin) ──
+
+def _au_role_manuscript(ctx, cache):
+    return ROLE_MANUSCRIPT.format(novel=ctx.novel_name), "authored"
+
+
+def _au_role_outline(ctx, cache):
+    return ROLE_OUTLINE.format(novel=ctx.novel_name), "authored"
+
+
+def _au_no_invent(ctx, cache):
+    # 逐字取自「示例去污染规则」第 6 条与「与正文阶段任务的关系」§6，非本工具撰写
+    return NO_INVENT, f"{TEMPLATES}/04_提示词/00_云端提示词生成器.md"
+
+
+def _au_output_format_manuscript(ctx, cache):
+    return _output_format(), "authored"
+
+
+def _au_noinvent_selfcheck(ctx, cache):
+    return "逐句检查——本段是否引入了细纲没有的东西？若有，删除或退回细纲层。\n", "authored"
+
+
+def _au_outline_task(ctx, cache):
+    return _outline_task(_beat(ctx, cache)), "authored"
+
+
+def _au_outline_output_format(ctx, cache):
+    return _outline_output_format(), "authored"
+
+
+def _au_outline_selfcheck(ctx, cache):
+    return _outline_selfcheck(), "authored"
+
+
+_AUTHORED = {
+    "role_manuscript": _au_role_manuscript,
+    "role_outline": _au_role_outline,
+    "no_invent": _au_no_invent,
+    "output_format_manuscript": _au_output_format_manuscript,
+    "noinvent_selfcheck": _au_noinvent_selfcheck,
+    "outline_task": _au_outline_task,
+    "outline_output_format": _au_outline_output_format,
+    "outline_selfcheck": _au_outline_selfcheck,
+}
+
+
+# ── resolver：动态计算，返回 [(title, body, origin), …] ──
+
+def _rv_redline_fallback(ctx, step, todos, cache):
+    ctx.data("01_设定/00_红线包.md")  # 触发缺失记录，与旧行为一致
+    todos.append("本书尚无 `01_设定/00_红线包.md`，已退回「逐份摘抄」老做法，建议补建")
+    out = [("通用写作规则（生成版）", ctx.tpl("01_写作规则/00_通用写作规则_生成版.md"),
+            f"{TEMPLATES}/01_写作规则/00_通用写作规则_生成版.md")]
+    out.append(("本书文风差异", ctx.data("01_设定/00_文风.md"), "01_设定/00_文风.md"))
+    return out
+
+
+def _rv_sysinst_common(ctx, step, todos, cache):
+    sysinst = _sysinst_text(ctx, cache)
     common = extract.read_section(sysinst, "通用指令（所有任务共用）")
     for h in ("核心原则", "文风红线", "世界基本法则红线", "版权与人设红线"):
         common += "\n" + extract.read_section(sysinst, h)
-    s_rules.add("系统指令 · 通用", common, f"{TEMPLATES}/01_写作规则/01_系统指令.md")
+    return [(step.title, common, f"{TEMPLATES}/01_写作规则/01_系统指令.md")]
 
-    s_rules.add("单章细纲字段说明", ctx.tpl("02_卡片模板/07_单章细纲模板.md"),
-                f"{TEMPLATES}/02_卡片模板/07_单章细纲模板.md")
 
-    for label, tplpath in _event_templates(outline_text):
-        s_rules.add(label, ctx.tpl(tplpath), f"{TEMPLATES}/{tplpath}")
+def _rv_event_templates_outline(ctx, step, todos, cache):
+    return [(label, ctx.tpl(p), f"{TEMPLATES}/{p}")
+            for label, p in _event_templates(_outline_text(ctx, cache))]
 
-    if 1 <= L.chapter <= 3:
-        s_rules.add("开篇三章设计指南", ctx.tpl("01_写作规则/05_开篇三章设计指南.md"),
-                    f"{TEMPLATES}/01_写作规则/05_开篇三章设计指南.md")
 
-    # 逐字取自「示例去污染规则」第 6 条与「与正文阶段任务的关系」§6，非本工具撰写
-    s_rules.add("禁脑补硬约束", NO_INVENT,
-                f"{TEMPLATES}/04_提示词/00_云端提示词生成器.md")
+def _rv_event_templates_beat(ctx, step, todos, cache):
+    return [(label, ctx.tpl(p), f"{TEMPLATES}/{p}")
+            for label, p in _event_templates_from_beat(_beat(ctx, cache))]
 
-    # ── 【已有数据】
-    s_data = Section("【已有数据】", lettered=True)
-    s_data.add("本章开篇状态（派生视图，禁止在正文中改写这些初值）",
-               ctx.read_path(L.opener_state), rel(ctx.novel_dir, L.opener_state))
-    s_data.add("本章细纲（逐场景执行，不跳过不合并）", outline_text, rel(ctx.novel_dir, L.outline))
 
-    prot = extract.card_path(ctx.novel_dir, extract.Ref("主角", ""))
-    if prot:
-        s_data.add("主角档案", ctx.read_path(prot), rel(ctx.novel_dir, prot))
+def _rv_cast_cards_outline(ctx, step, todos, cache):
+    tmp = Section("_")
+    _add_cast_cards(ctx, tmp, _outline_text(ctx, cache),
+                    sections=step.sections, todos=todos)
+    return _blocks_of(tmp)
 
-    _add_cast_cards(ctx, s_data, outline_text)
 
+def _rv_cast_cards_beat(ctx, step, todos, cache):
+    beat = _beat(ctx, cache)
+    tmp = Section("_")
+    _add_cast_cards(ctx, tmp, beat.get("摘要", "") if beat else "",
+                    from_beat=True, sections=step.sections, todos=todos)
+    return _blocks_of(tmp)
+
+
+def _wr_hard_or_todo(ctx, todos):
+    """硬规则行；有 WR 规则却一条「硬」都没取到 → 记 todo（多半是列错位），返回 []。"""
     concept = ctx.data("01_设定/00_小说概念.md")
     hard = extract.wr_rules(concept, ("硬",))
-    if hard:
-        body = ("以下为世界**硬规则**，本章不得违反：\n\n"
-                "| 规则ID | 名称 | 状态 | 内容 |\n|---|---|---|---|\n" + "\n".join(hard) + "\n\n"
-                + extract.read_section(concept, "信息与认知法则"))
-        s_data.add("世界基本法则 · 硬规则清单", body, "extract:01_设定/00_小说概念.md")
+    if not hard and extract.wr_rules(concept, states=None):
+        todos.append("【世界基本法则】有 WR 规则，但没有一条是「硬」状态——"
+                     "状态列错位？硬规则清单这次是空的")
+    return concept, hard
 
-    _add_dy_and_fh(ctx, s_data, outline_text)
 
-    # ── 【任务】：执行要求逐字取自系统指令任务2，文件名指代改写为区块标题
-    s_task = Section("【任务】")
+def _rv_wr_hard_manuscript(ctx, step, todos, cache):
+    concept, hard = _wr_hard_or_todo(ctx, todos)
+    if not hard:
+        return []
+    body = ("以下为世界**硬规则**，本章不得违反：\n\n"
+            "| 规则ID | 名称 | 状态 | 内容 |\n|---|---|---|---|\n" + "\n".join(hard) + "\n\n"
+            + extract.read_section(concept, "信息与认知法则"))
+    return [(step.title, body, "extract:01_设定/00_小说概念.md")]
+
+
+def _rv_wr_hard_outline(ctx, step, todos, cache):
+    _concept, hard = _wr_hard_or_todo(ctx, todos)
+    if not hard:
+        return []
+    body = "| 规则ID | 名称 | 状态 | 内容 |\n|---|---|---|---|\n" + "\n".join(hard) + "\n"
+    return [(step.title, body, "extract:01_设定/00_小说概念.md")]
+
+
+def _rv_dy_fh_outline(ctx, step, todos, cache):
+    tmp = Section("_")
+    _add_dy_and_fh(ctx, tmp, _outline_text(ctx, cache), todos=todos)
+    return _blocks_of(tmp)
+
+
+def _rv_dy_fh_beat(ctx, step, todos, cache):
+    beat = _beat(ctx, cache)
+    tmp = Section("_")
+    _add_dy_and_fh(ctx, tmp, beat.get("摘要", "") if beat else "", todos=todos)
+    return _blocks_of(tmp)
+
+
+def _rv_task_directive(ctx, step, todos, cache):
     # 只取围栏内的「给云端的指令」；围栏后的「拼装为云端提示词时……」是给本地
     # Agent 的操作说明（含仓库路径与脚本名），不发给云端。
-    task2 = extract.fenced_block(extract.read_section(sysinst, "任务2：写单章正文"))
+    task2 = extract.fenced_block(
+        extract.read_section(_sysinst_text(ctx, cache), "任务2：写单章正文"))
     # 围栏内自带模板的示例抬头「【任务】写第X章正文」+「## 执行要求」。前者的「第X章」是
     # 占位符（照抄会把未替换的 X 发给云端），后者与本段自己的「## 执行要求」小节标题重复。
     # 两行都属于模板的自我框架，剥掉；真正的章次由本段标题与【已有数据】里的细纲交代。
@@ -317,109 +426,131 @@ def build_manuscript(ctx: Ctx) -> Prompt:
         "00_通用模板/03_字段词表.md": "【输出格式】的【待登记清单】",
         "01_状态履历.md": "本章状态履历（本地 Agent 负责，云端不必关心）",
     })
-    s_task.add("执行要求", task2, f"{TEMPLATES}/01_写作规则/01_系统指令.md")
-    s_task.add("本章场次与字数预算", _scene_budget_table(outline_text, todos),
-               f"extract:{rel(ctx.novel_dir, L.outline)}")
+    return [(step.title, task2, f"{TEMPLATES}/01_写作规则/01_系统指令.md")]
 
-    # ── 【输出格式】/【输出后自检】（元指令段，允许出现文件名与编号）
-    s_out = Section("【输出格式】")
-    s_out.add("正文与附录", _output_format(), "authored")
 
-    s_check = Section("【输出后自检】")
-    s_check.add("单章一站式自检清单", ctx.tpl("01_写作规则/00_通用写作规则_校验版.md"),
-                f"{TEMPLATES}/01_写作规则/00_通用写作规则_校验版.md")
-    if 1 <= L.chapter <= 3:
-        guide = ctx.tpl("01_写作规则/05_开篇三章设计指南.md")
-        # 标题以指南实际写法为准；另两个是历史别名，留作兜底。
-        contract = (extract.read_section(guide, "六、三章整体契约自检清单")
-                    or extract.read_section(guide, "六、开篇三章契约自检清单")
-                    or extract.read_section(guide, "六、契约自检清单"))
-        if contract:
-            s_check.add("开篇三章契约自检", contract,
-                        f"{TEMPLATES}/01_写作规则/05_开篇三章设计指南.md")
-        else:
-            # Section.add 遇空内容会直接 return——不报待办的话，这里会静默少一段自检。
-            _todo(todos, "开篇三章契约自检清单没取到（指南的六级标题可能改名了）",
-                  "核对 05_开篇三章设计指南.md 的「## 六、…」标题并同步本处")
-    s_check.add("脑补自检", "逐句检查——本段是否引入了细纲没有的东西？若有，删除或退回细纲层。\n",
-                "authored")
+def _rv_scene_budget(ctx, step, todos, cache):
+    return [(step.title, _scene_budget_table(_outline_text(ctx, cache), todos),
+             f"extract:{rel(ctx.novel_dir, ctx.layout.outline)}")]
 
-    return Prompt(header, [s_role, s_rules, s_data, s_task, s_out, s_check], todos,
-                  prose_output=True)
+
+def _rv_opening_contract(ctx, step, todos, cache):
+    guide = ctx.tpl("01_写作规则/05_开篇三章设计指南.md")
+    contract = (extract.read_section(guide, "六、三章整体契约自检清单")
+                or extract.read_section(guide, "六、开篇三章契约自检清单")
+                or extract.read_section(guide, "六、契约自检清单"))
+    if not contract:
+        todos.append("开篇三章设计指南里找不到「六、…契约自检清单」小节——"
+                     "标题改过？【输出后自检】少了这块")
+        return []
+    return [(step.title, contract, f"{TEMPLATES}/01_写作规则/05_开篇三章设计指南.md")]
+
+
+def _rv_beat_block(ctx, step, todos, cache):
+    return [(step.title, _beat_block(_beat(ctx, cache), todos),
+             f"extract:{rel(ctx.novel_dir, ctx.layout.volume_plan)}")]
+
+
+def _rv_sliding_window(ctx, step, todos, cache):
+    return [(step.title, _sliding_window(ctx, todos), "extract:上一章正文")]
+
+
+def _rv_opener_state_outline(ctx, step, todos, cache):
+    L = ctx.layout
+    body = ctx.read_path(L.opener_state) or _todo(
+        todos, "本章开篇状态未物化",
+        "跑 `build_state_snapshot.py --write-chapter-openers`（首章用冻结基线）")
+    return [(step.title, body, rel(ctx.novel_dir, L.opener_state))]
+
+
+_RESOLVERS = {
+    "redline_fallback": _rv_redline_fallback,
+    "sysinst_common": _rv_sysinst_common,
+    "event_templates_outline": _rv_event_templates_outline,
+    "event_templates_beat": _rv_event_templates_beat,
+    "cast_cards_outline": _rv_cast_cards_outline,
+    "cast_cards_beat": _rv_cast_cards_beat,
+    "wr_hard_manuscript": _rv_wr_hard_manuscript,
+    "wr_hard_outline": _rv_wr_hard_outline,
+    "dy_fh_outline": _rv_dy_fh_outline,
+    "dy_fh_beat": _rv_dy_fh_beat,
+    "task_directive": _rv_task_directive,
+    "scene_budget": _rv_scene_budget,
+    "opening_contract": _rv_opening_contract,
+    "beat_block": _rv_beat_block,
+    "sliding_window": _rv_sliding_window,
+    "opener_state_outline": _rv_opener_state_outline,
+}
+
+
+def _resolve_step(ctx: Ctx, step: manifest.Step, todos: list, cache: dict) -> list:
+    k = step.kind
+    if k == "tpl":
+        return [(step.title, _apply_mode(ctx.tpl(step.ref), step), f"{TEMPLATES}/{step.ref}")]
+    if k == "data":
+        return [(step.title, _apply_mode(ctx.data(step.ref), step), step.ref)]
+    if k == "layout":
+        if step.ref == "outline":
+            return [(step.title, _apply_mode(_outline_text(ctx, cache), step),
+                     rel(ctx.novel_dir, ctx.layout.outline))]
+        if step.ref == "opener_state":
+            return [(step.title, _apply_mode(ctx.read_path(ctx.layout.opener_state), step),
+                     rel(ctx.novel_dir, ctx.layout.opener_state))]
+        if step.ref == "volume_plan":
+            return [(step.title, _apply_mode(ctx.read_path(ctx.layout.volume_plan), step),
+                     rel(ctx.novel_dir, ctx.layout.volume_plan))]
+        if step.ref == "protagonist":
+            p = extract.card_path(ctx.novel_dir, extract.Ref("主角", ""))
+            if p is None:
+                return []
+            return [(step.title, _apply_mode(ctx.read_path(p), step), rel(ctx.novel_dir, p))]
+        return []
+    if k == "authored":
+        body, origin = _AUTHORED[step.ref](ctx, cache)
+        return [(step.title, body, origin)]
+    if k == "resolver":
+        return _RESOLVERS[step.ref](ctx, step, todos, cache)
+    return []
+
+
+def _build(ctx: Ctx, task_key: str, header: str, prose_output: bool) -> Prompt:
+    spec = manifest.load(ctx.repo_root).task(task_key)
+    secs = {name: Section(f"【{name}】", lettered=(name in spec.lettered))
+            for name in spec.segments}
+    todos: list[str] = []
+    cache: dict = {}
+    for step in spec.steps:
+        if not _when_ok(ctx, step):
+            continue
+        for title, body, origin in _resolve_step(ctx, step, todos, cache):
+            secs[step.into].add(title, body, origin)
+    return Prompt(header, [secs[n] for n in spec.segments], todos, prose_output=prose_output)
+
+
+# ─────────────────────────────────────────────────────────── 正文
+
+def build_manuscript(ctx: Ctx) -> Prompt:
+    L = ctx.layout
+    header = _header(
+        ctx, L.prompt_dir / "01_正文生成.md", L.output_dir / "01_正文生成.md",
+        L.manuscript, f"写《{ctx.novel_name}》本章正文",
+        "落位正文 → 按【输出格式】的【待登记清单】回填本章 `02_状态/01_状态履历.md` → "
+        "`merge_chapter_state.py --chapter-dir <本章目录>` → `audit_consistency.py` 复查 → "
+        "`review_manuscript.py --chapter-dir <本章目录>` 起冷读循环。")
+    return _build(ctx, "正文", header, prose_output=True)
 
 
 # ─────────────────────────────────────────────────────────── 单章细纲
 
 def build_outline(ctx: Ctx) -> Prompt:
     L = ctx.layout
-    todos: list[str] = []
-    archive = L.prompt_dir / "00_单章细纲.md"
-    backfill = L.output_dir / "00_单章细纲.md"
-
     header = _header(
-        ctx, archive, backfill, L.outline, f"写《{ctx.novel_name}》本章细纲",
+        ctx, L.prompt_dir / "00_单章细纲.md", L.output_dir / "00_单章细纲.md",
+        L.outline, f"写《{ctx.novel_name}》本章细纲",
         "落位细纲到规划层 → `audit_consistency.py` 复查 → "
         "`review_manuscript.py --chapter-dir <本章目录> --mode outline` 起冷读循环"
         "（细纲门禁比正文严：必改项必须清零才能去拼正文提示词）。")
-
-    s_role = Section("【你的角色】")
-    s_role.add("角色与纪律", ROLE_OUTLINE.format(novel=ctx.novel_name), "authored")
-
-    # ── 【必读模板】
-    s_tpl = Section("【必读模板】")
-    s_tpl.add("单章细纲模板", ctx.tpl("02_卡片模板/07_单章细纲模板.md"),
-              f"{TEMPLATES}/02_卡片模板/07_单章细纲模板.md")
-    s_tpl.add("通用写作规则（生成版）", ctx.tpl("01_写作规则/00_通用写作规则_生成版.md"),
-              f"{TEMPLATES}/01_写作规则/00_通用写作规则_生成版.md")
-    if 1 <= L.chapter <= 3:
-        s_tpl.add("开篇三章设计指南", ctx.tpl("01_写作规则/05_开篇三章设计指南.md"),
-                  f"{TEMPLATES}/01_写作规则/05_开篇三章设计指南.md")
-
-    plan_text = ctx.read_path(L.volume_plan)
-    beat = _beat_row(plan_text, L.chapter)
-    for label, tplpath in _event_templates_from_beat(beat):
-        s_tpl.add(label, ctx.tpl(tplpath), f"{TEMPLATES}/{tplpath}")
-
-    # ── 【已有数据】
-    s_data = Section("【已有数据】", lettered=True)
-    s_data.add("本卷大纲 · 本章节拍", _beat_block(beat, todos),
-               f"extract:{rel(ctx.novel_dir, L.volume_plan)}")
-
-    prot = extract.card_path(ctx.novel_dir, extract.Ref("主角", ""))
-    if prot:
-        s_data.add("主角档案", ctx.read_path(prot), rel(ctx.novel_dir, prot))
-
-    # 出场对象 = 节拍表本章摘要里的全部 @引用（`00_系统架构规范.md` §二·A「卷大纲的落地」）
-    _add_cast_cards(ctx, s_data, beat.get("摘要", "") if beat else "", from_beat=True)
-
-    concept = ctx.data("01_设定/00_小说概念.md")
-    hard = extract.wr_rules(concept, ("硬",))
-    if hard:
-        s_data.add("世界基本法则 · 硬规则清单",
-                   "| 规则ID | 名称 | 状态 | 内容 |\n|---|---|---|---|\n" + "\n".join(hard) + "\n",
-                   "extract:01_设定/00_小说概念.md")
-
-    _add_dy_and_fh(ctx, s_data, beat.get("摘要", "") if beat else "")
-
-    s_data.add("上下文滑动窗口", _sliding_window(ctx, todos),
-               "extract:上一章正文")
-    s_data.add("本章开篇状态", ctx.read_path(L.opener_state) or
-               _todo(todos, "本章开篇状态未物化",
-                     "跑 `build_state_snapshot.py --write-chapter-openers`（首章用冻结基线）"),
-               rel(ctx.novel_dir, L.opener_state))
-
-    # ── 【任务目标】
-    s_task = Section("【任务目标】")
-    s_task.add("产出要求", _outline_task(beat), "authored")
-
-    s_out = Section("【输出格式】")
-    s_out.add("按模板字段全量输出", _outline_output_format(), "authored")
-
-    s_check = Section("【验收自检】")
-    s_check.add("自检清单", _outline_selfcheck(), "authored")
-
-    return Prompt(header, [s_role, s_tpl, s_data, s_task, s_out, s_check], todos,
-                  prose_output=False)
+    return _build(ctx, "细纲", header, prose_output=False)
 
 
 # ─────────────────────────────────────────────────────────── 辅助
@@ -457,8 +588,10 @@ def _event_templates_from_beat(beat: Optional[dict]) -> list[tuple[str, str]]:
     return []
 
 
-def _add_cast_cards(ctx: Ctx, sec: Section, source_text: str, from_beat: bool = False):
-    """把出场对象逐个解析成卡片并全文内联。
+def _add_cast_cards(ctx: Ctx, sec: Section, source_text: str, from_beat: bool = False,
+                    sections: Optional[list[str]] = None, todos: Optional[list] = None):
+    """把出场对象逐个解析成卡片内联。`sections` 非空时只取卡里那几个区块（原文逐字），
+    为空 / None 时整份内联。
 
     正文阶段取自细纲「## 出场对象」表；细纲阶段取自节拍表本章摘要的 `@引用`
     （`00_系统架构规范.md` §二·A：供任务11 检索的「本章出场对象」＝摘要里的全部 @引用）。
@@ -493,14 +626,30 @@ def _add_cast_cards(ctx: Ctx, sec: Section, source_text: str, from_beat: bool = 
         roster.append(f"| {e.ref.render()} | {e.mode or '—'} | 见下方内联卡片 |")
         if p not in seen and e.ref.ref_type != "主角":
             seen.add(p)
-            cards.append((e.ref.name, p))
+            cards.append((e.ref.name, e.ref.ref_type, p))
 
     sec.add(roster_title, lead + "\n".join(roster) + "\n", "extract:出场对象")
-    for name, p in cards:
-        sec.add(f"出场对象卡 · {name}", ctx.read_path(p), rel(ctx.novel_dir, p))
+    for name, rtype, p in cards:
+        text = ctx.read_path(p)
+        # sections 收窄只对人物卡生效——势力/地理卡结构不同（无【角色内核】等），
+        # 套人物 section 名会切出空串、整卡消失（枯港矿城/灰壤凡域曾这样被吞掉）。
+        if sections and rtype == "人物":
+            present = extract.sections_present(text, sections)
+            if present:
+                text = extract.read_sections(text, sections)
+                missing = [s for s in sections if s not in present]
+                if missing and todos is not None:
+                    # 部分区块被改名 / 漏填 → 那几段静默消失过；现在报出来
+                    todos.append(f"人物卡 `{p.name}` 缺清单声明的区块 {'、'.join(missing)}"
+                                 f"——这几段未内联，检查是否按 `04_人物模板` 的区块结构填写")
+            elif todos is not None:
+                # 这张卡一个声明的区块都没有 → 结构不符预期，整卡照给、不丢数据
+                todos.append(f"人物卡 `{p.name}` 没有清单声明的任何区块（{'/'.join(sections)}），"
+                             f"已整份内联——检查卡片是否按 `04_人物模板` 的区块结构填写")
+        sec.add(f"出场对象卡 · {name}", text, rel(ctx.novel_dir, p))
 
 
-def _add_dy_and_fh(ctx: Ctx, sec: Section, source_text: str):
+def _add_dy_and_fh(ctx: Ctx, sec: Section, source_text: str, todos: Optional[list] = None):
     refs = extract.parse_refs(source_text)
     dy_ids = [r.name for r in refs if r.ref_type == "道义"]
     fh_ids = [r.name for r in refs if r.ref_type == "伏笔"]
@@ -512,8 +661,13 @@ def _add_dy_and_fh(ctx: Ctx, sec: Section, source_text: str):
 
     if dy_ids:
         core = ctx.data("01_设定/05_核心道义.md")
-        body = "\n\n".join(filter(None, (extract.dy_block(core, d) for d in dy_ids)))
+        resolved = {d: extract.dy_block(core, d) for d in dy_ids}
+        body = "\n\n".join(filter(None, resolved.values()))
         sec.add(f"本章道义 · {'、'.join(dy_ids)}", body, "extract:01_设定/05_核心道义.md")
+        miss = [d for d, v in resolved.items() if not v.strip()]
+        if miss and todos is not None:
+            todos.append(f"细纲点名了道义 {'、'.join(miss)}，但 `01_设定/05_核心道义.md` 里"
+                         f"取不到对应小节（标题需含该 ID）——这几条未内联")
 
     if fh_ids:
         ledger = ctx.data("03_规划/00_伏笔总纲.md")
@@ -523,6 +677,9 @@ def _add_dy_and_fh(ctx: Ctx, sec: Section, source_text: str):
             sec.add(f"本章伏笔 · {'、'.join(fh_ids)}",
                     "登记以本表为准，**禁止现编伏笔号**：\n\n" + "\n".join(rows) + "\n",
                     "extract:03_规划/00_伏笔总纲.md")
+        elif todos is not None:
+            todos.append(f"细纲点名了伏笔 {'、'.join(fh_ids)}，但伏笔总纲 / 卷伏笔册里"
+                         f"没有一条对应登记行——伏笔号写错？总纲漏登记？")
 
 
 def _beat_row(plan_text: str, chapter: int) -> Optional[dict]:
@@ -612,15 +769,17 @@ def _outline_task(beat: Optional[dict]) -> str:
         "四类功能不重复，禁止连续两个「转折」场；单场同质内容不超过 800 字。",
         "2. 「## 出场对象」表**必填且完整**——本章登场、被提及并影响本章、或状态被改动的对象逐个列出，"
         "含物品 / 财务 / 关系类状态对象。此表是章后状态对账的取数依据，漏一个就会在对账时报警。",
-        "3. 涉及数值 / 计量 / 经济的机制必须**在细纲内闭合**（单位、折算、克扣基数与结果算得通），"
-        "不得留给正文临场编数字。",
-        "4. 伏笔的埋设 / 推进 / 回收只能用【已有数据】里已登记的编号，**禁止现编**；本章不涉及就写「无」。",
+        "3. **本章特有**的数值 / 计量 / 经济**变化**必须在细纲内算清（单位、折算率、基数、结果算得通），"
+        "不得留给正文临场编数字；但全书恒定的换算基准（如「N 两废料折一枚」）、主角人设红线、异宝档位、"
+        "禁用词等**写指针「见红线包 §X」，不重抄正文**——正文提示词会另行内联红线包，抄两遍只会口径漂移。",
+        "4. 细纲是场景骨架、不是迷你提示词：场景「内容简述」≤120 字、只写本场事件；场景下的红线提醒用一句指针，不复述规则原文。",
+        "5. 伏笔的埋设 / 推进 / 回收只能用【已有数据】里已登记的编号，**禁止现编**；本章不涉及就写「无」。",
     ]
     if kind:
-        lines.append(f"5. 本章核心事件类型为「{kind}」，须按【必读模板】对应的事件卡模板补齐要素区块。")
+        lines.append(f"6. 本章核心事件类型为「{kind}」，须按【必读模板】对应的事件卡模板补齐要素区块。")
     if hook:
-        lines.append(f"6. 章末钩子类型为「{hook}」，按此设计，不得改成别的强度。")
-    lines.append("7. 拿不准、或【已有数据】不足以判定的，列进「待确认清单」交作者裁决，**不要自行编造**。")
+        lines.append(f"7. 章末钩子类型为「{hook}」，按此设计，不得改成别的强度。")
+    lines.append("8. 拿不准、或【已有数据】不足以判定的，列进「待确认清单」交作者裁决，**不要自行编造**。")
     return "\n".join(lines) + "\n"
 
 
@@ -642,7 +801,8 @@ def _outline_selfcheck() -> str:
 - [ ] 场景功能不重复；无连续两个「转折」场；单场同质内容 ≤800 字
 - [ ] 各场预算字数之和落在本章字数口径内
 - [ ] 「## 出场对象」表完整（含 物品 / 财务 / 关系 类状态对象）
-- [ ] 数值 / 计量 / 经济机制在细纲内闭合，正文无需临场编数字
+- [ ] 本章特有的数值 / 计量 / 经济变化在细纲内算清；全书基准与红线用指针「见红线包 §X」、未重抄
+- [ ] 场景「内容简述」≤120 字；场景红线提醒是指针不是规则原文复述
 - [ ] 伏笔编号全部来自【已有数据】，无现编
 - [ ] 每个 `@引用` 的名称与【已有数据】一致
 - [ ] 与【已有数据】A 的节拍摘要逐项对得上，没有多出摘要之外的主线事件

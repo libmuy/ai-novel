@@ -180,6 +180,68 @@ class RulesAuditTest(unittest.TestCase):
         _write(self.tmp / "00_通用模板/05_项目骨架模板/05_工作区/02_状态/03_状态对象白名单.md", "x\n")
         self.assertNotIn("RULE007", self._codes("RULE007"))
 
+    # ---- RULE009 任务输入清单 ----
+
+    def _manifest_repo(self, toml_body: str):
+        """搭一个够 RULE009 跑的临时仓库：真实工具目录软链 + 最小 00_通用模板。"""
+        real = Path(__file__).resolve().parents[3]
+        (self.tmp / "02_工具").mkdir(parents=True, exist_ok=True)
+        os.symlink(real / "02_工具/01_小说通用工具", self.tmp / "02_工具/01_小说通用工具")
+        _write(self.tmp / "00_通用模板/04_提示词/任务输入清单.toml", toml_body)
+        _write(self.tmp / "00_通用模板/02_卡片模板/04_人物模板.md",
+               "# 人物模板\n### 【基础档案】\nx\n### 【角色内核】\ny\n")
+        _write(self.tmp / "00_通用模板/00_使用说明.md",
+               "| 写单章正文 | 见 `04_提示词/任务输入清单.toml` | — |\n"
+               "| 开篇三章设计（=任务11 章0001~0003） | 见 `04_提示词/任务输入清单.toml` | — |\n")
+        # 派生视图：先按当前 toml 生成一份正确的，个别用例再破坏
+        sys.path.insert(0, str(real / "02_工具/01_小说通用工具"))
+        import importlib
+        import prompt_build.manifest as M
+        importlib.reload(M)
+        import build_prompt_manifest as BPM
+        importlib.reload(BPM)
+        try:
+            man = M.parse(toml_body)
+            _write(self.tmp / BPM.VIEW_REL, BPM.render(man))
+        except M.ManifestError:
+            pass
+        return M, BPM
+
+    _GOOD_TOML = (
+        '[task."正文"]\ndescription = "写单章正文"\nscripted = "x"\n'
+        'segments = ["你的角色", "已有数据"]\nlettered = ["已有数据"]\n\n'
+        '[[task."正文".step]]\ninto = "你的角色"\nsource = "authored:role_manuscript"\n'
+        'title = "角色与纪律"\nmode = "authored"\n\n'
+        '[[task."正文".step]]\ninto = "已有数据"\nsource = "resolver:cast_cards_outline"\n'
+        'mode = "sections"\nsections = ["【基础档案】", "【角色内核】"]\n'
+    )
+
+    def test_manifest_good_no_finding(self):
+        self._manifest_repo(self._GOOD_TOML)
+        self.assertNotIn("RULE009", self._codes("RULE009"))
+
+    def test_manifest_bad_section_name_flagged(self):
+        bad = self._GOOD_TOML.replace("【角色内核】", "【根本没有这个区块】")
+        self._manifest_repo(bad)
+        found = self._codes("RULE009")
+        self.assertIn("RULE009", found)
+        self.assertIn("根本没有这个区块", "".join(found["RULE009"].locations))
+
+    def test_manifest_stale_view_flagged(self):
+        self._manifest_repo(self._GOOD_TOML)
+        _write(self.tmp / "00_通用模板/04_提示词/任务输入清单.md", "# 过期了\n")
+        found = self._codes("RULE009")
+        self.assertIn("RULE009", found)
+
+    def test_manifest_routing_row_not_pointer_flagged(self):
+        self._manifest_repo(self._GOOD_TOML)
+        _write(self.tmp / "00_通用模板/00_使用说明.md",
+               "| 写单章正文 | 00_通用写作规则_生成版, 07_单章细纲模板 | 一堆数据 |\n"
+               "| 开篇三章设计（=任务11 章0001~0003） | 见 `04_提示词/任务输入清单.toml` | — |\n")
+        found = self._codes("RULE009")
+        self.assertIn("RULE009", found)
+        self.assertIn("写单章正文", "".join(found["RULE009"].locations))
+
     # ---- 真实仓库：规则层不得有 error ----
 
     def test_real_repo_has_no_rule_errors(self):

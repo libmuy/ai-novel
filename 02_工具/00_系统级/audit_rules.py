@@ -448,6 +448,93 @@ def check_slices(repo_root, cfg) -> list[Finding]:
     )]
 
 
+# ---------------------------------------------------------------- RULE009 任务输入清单
+
+# resolver → 它取的对象卡对照哪个模板（sections/fields 名要在这份模板里存在）
+_MANIFEST_RESOLVER_TPL = {
+    "cast_cards_outline": "02_卡片模板/04_人物模板.md",
+    "cast_cards_beat": "02_卡片模板/04_人物模板.md",
+}
+
+
+def check_manifest(repo_root, cfg) -> list[Finding]:
+    """`00_通用模板/04_提示词/任务输入清单.toml`（脚本化提示词的输入权威）与其派生视图、
+    路由表指针的一致性。source 解析得到、sections/fields 名在对照模板里存在、
+    `任务输入清单.md` 与 TOML 逐字一致、路由表脚本行是指针。"""
+    tf = repo_root / "00_通用模板/04_提示词/任务输入清单.toml"
+    if not tf.is_file():
+        return []  # 未建则跳过——脚本化提示词是可选特性
+
+    sys.path.insert(0, str(repo_root / "02_工具/01_小说通用工具"))
+    try:
+        from prompt_build import manifest as M
+        import build_prompt_manifest as BPM
+    except ImportError as e:
+        return [Finding(ERROR, "RULE009", f"任务输入清单模块导入失败：{e}")]
+
+    try:
+        man = M.parse(tf.read_text(encoding="utf-8"))
+    except M.ManifestError as e:
+        return [Finding(ERROR, "RULE009", f"任务输入清单 TOML 解析失败：{e}", [M.MANIFEST_REL])]
+
+    heading_re = re.compile(r"^#{1,6}\s+(.*?)\s*$", re.M)
+    firstcol_re = re.compile(r"^\|\s*([^|]+?)\s*\|", re.M)
+    problems: list[str] = []
+
+    for tname, task in man.tasks.items():
+        for st in task.steps:
+            if st.kind == "tpl" and not (repo_root / "00_通用模板" / st.ref).is_file():
+                problems.append(f"[{tname}] tpl source 不存在：`{st.ref}`")
+            if st.mode not in ("sections", "fields"):
+                continue
+            tpl_rel = st.ref if st.kind == "tpl" else _MANIFEST_RESOLVER_TPL.get(st.ref)
+            if not tpl_rel:
+                problems.append(f"[{tname}] {st.source} 用了 {st.mode} 但没登记对照模板"
+                                f"（_MANIFEST_RESOLVER_TPL）")
+                continue
+            tpl_path = repo_root / "00_通用模板" / tpl_rel
+            if not tpl_path.is_file():
+                problems.append(f"[{tname}] {st.source} 的对照模板不存在：{tpl_rel}")
+                continue
+            text = tpl_path.read_text(encoding="utf-8")
+            if st.mode == "sections":
+                # 卡片模板里区块标记既有 `### 【X】` 也有行首裸 `【X】（说明）`
+                pool = set(heading_re.findall(text)) | set(
+                    re.findall(r"^\s*(【[^】\n]+】)", text, re.M))
+            else:
+                pool = set(firstcol_re.findall(text))
+            want = st.sections if st.mode == "sections" else st.fields
+            kind = "节" if st.mode == "sections" else "字段"
+            for w in want:
+                if w not in pool and not any(w in x for x in pool):
+                    problems.append(f"[{tname}] {st.source} 要的{kind}「{w}」在 {tpl_rel} 里找不到")
+
+    view = repo_root / BPM.VIEW_REL
+    if not view.is_file() or view.read_text(encoding="utf-8") != BPM.render(man):
+        problems.append(f"{BPM.VIEW_REL} 与 TOML 不一致——跑 `build_prompt_manifest.py --write` 重出")
+
+    usage = repo_root / "00_通用模板/00_使用说明.md"
+    if usage.is_file():
+        utext = usage.read_text(encoding="utf-8")
+        for key in ("| 写单章正文 |", "| 开篇三章设计（=任务11"):
+            row = next((l for l in utext.splitlines()
+                        if l.lstrip().startswith(key)), None)
+            if row and "任务输入清单" not in row:
+                problems.append(f"00_使用说明.md 路由表「{key.strip(' |')}」行未指向 "
+                                f"`任务输入清单.toml`（脚本化任务的输入清单应是指针，不是并列的第二份）")
+
+    if not problems:
+        return []
+    return [Finding(
+        ERROR, "RULE009",
+        f"任务输入清单有 {len(problems)} 处问题",
+        problems,
+        "机读权威是 `00_通用模板/04_提示词/任务输入清单.toml`：改内联粒度改它，"
+        "跑 `02_工具/01_小说通用工具/build_prompt_manifest.py --write` 重出人读视图；"
+        "resolver 白名单在 `prompt_build/manifest.py`",
+    )]
+
+
 # ---------------------------------------------------------------- 汇总输出
 
 CHECKS = {
@@ -459,6 +546,7 @@ CHECKS = {
     "RULE006": lambda rr, cfg, rf: check_duplicate_text(rr, cfg, rf),
     "RULE007": lambda rr, cfg, rf: check_tool_paths(rr, cfg),
     "RULE008": lambda rr, cfg, rf: check_slices(rr, cfg),
+    "RULE009": lambda rr, cfg, rf: check_manifest(rr, cfg),
 }
 
 
