@@ -329,6 +329,31 @@ class TestChapterOpeners(unittest.TestCase):
             cast = st.parse_chapter_cast(plan, "角色.苏砚")
             self.assertEqual(cast, {"角色.苏砚", "势力.黑石会"})
 
+    def test_pending_chapter_opener_materialized(self):
+        """下一章（02_状态/ 目录已建、无 01_状态履历.md）也要写规范抬头的开篇状态。
+
+        回归 ch0004：以前只能靠 `--at-chapter --output` 单点物化，抬头写成
+        「开篇状态快照 · ../4」、非规范。现在 --write-chapter-openers 直接覆盖。
+        """
+        import build_state_snapshot as bss
+        with tempfile.TemporaryDirectory() as td:
+            novel = self._novel(td)
+            # 章0003：工作区目录已建，但还没写履历
+            pending = os.path.join(novel, "05_工作区/03_第01部/03_卷01/05_章0003/02_状态")
+            os.makedirs(pending, exist_ok=True)
+
+            written = bss.write_chapter_openers(novel, verbose=False)
+            opener = os.path.join(pending, "00_开篇状态.md")
+            self.assertIn(opener, written)
+
+            body = open(opener, encoding="utf-8").read()
+            self.assertTrue(body.startswith("# 本章开篇状态 · 03_第01部/03_卷01/05_章0003"))
+            self.assertIn("--write-chapter-openers 生成", body)      # 完整溯源注
+            self.assertNotIn("开篇状态快照 · ..", body)              # 不是旧的坏抬头
+            # 折叠了章0001（苏砚境界→炼气一层），无细纲 → 全量
+            self.assertIn("角色.苏砚 | 境界 | 运算-枚举 | 炼气一层", body)
+            self.assertIn("未找到单章细纲", body)
+
 
 class TestRelationId(unittest.TestCase):
     """W5：关系对象 ID `关系.<甲>&<乙>` 规范。"""

@@ -49,9 +49,17 @@ def _fold(novel_dir, changelog_paths):
 
 
 def write_chapter_openers(novel_dir, *, verbose=True):
-    """为每个已建履历的章生成/刷新 00_开篇状态.md（派生视图）。
+    """为每章生成/刷新 00_开篇状态.md（派生视图）。
     第 N 章开篇状态 = 基线 ⊕ 折叠「排在第 N 章之前」的全部章履历，再按第 N 章
     单章细纲的「## 出场对象」清单裁剪。返回写入路径列表。
+
+    覆盖两类章：
+      ① 已建履历的章——折叠到该章履历之前；
+      ② 「下一章」：工作区 `<章>/02_状态/` 目录已建、还没写 `01_状态履历.md` 的章
+         （拼细纲提示词就要它的开篇状态）——折叠到全部已有履历。
+    没有 ② 时，`--at-chapter <章目录> --output …/00_开篇状态.md` 也能单点物化，
+    但那条路径写出的抬头是「开篇状态快照 · …」、非规范；本函数写的是规范抬头
+    「# 本章开篇状态 · <章路径>」＋完整溯源注，两条路径产物应当一致。
 
     供 CLI（--write-chapter-openers）与 merge/rebuild 收尾自动调用。
     基线不存在时静默跳过（返回 []）。"""
@@ -63,10 +71,8 @@ def write_chapter_openers(novel_dir, *, verbose=True):
     changelogs = st.iter_workspace_changelogs(novel_dir)
     prot = st.protagonist_state_id(novel_dir)
     written = []
-    for i, cl in enumerate(changelogs):
-        records = _fold(novel_dir, changelogs[:i])   # 严格早于本章的全部章
-        chap_dir = os.path.dirname(cl)
-        chap_name = st.chapter_rel_name(cl, novel_dir)
+
+    def _emit(chap_dir, chap_name, records):
         cast = st.parse_chapter_cast(st.plan_path_for_chapter(chap_dir, novel_dir), prot)
         if cast is None:
             shown, missing = records, None
@@ -80,6 +86,30 @@ def write_chapter_openers(novel_dir, *, verbose=True):
         if verbose:
             tag = "全量(无出场对象清单)" if cast is None else f"{len(shown)}/{len(records)} 对象"
             print(f"  开篇状态: {chap_name}  [{tag}]")
+
+    for i, cl in enumerate(changelogs):
+        _emit(os.path.dirname(cl), st.chapter_rel_name(cl, novel_dir),
+              _fold(novel_dir, changelogs[:i]))   # 严格早于本章的全部章
+
+    # ② 下一章（目录已建、无履历）
+    done = {os.path.normpath(os.path.dirname(cl)) for cl in changelogs}
+    ws = os.path.join(novel_dir, st.WORKSPACE_DIRNAME)
+    for dirpath, _dirs, _files in os.walk(ws):
+        if os.path.basename(dirpath) != "02_状态":
+            continue
+        state_dir = dirpath
+        synth_cl = os.path.normpath(os.path.join(state_dir, st.CHANGELOG_FILENAME))
+        chap_dir = os.path.normpath(state_dir)  # render 目标是 02_状态/ 目录
+        if os.path.normpath(state_dir) in done:
+            continue
+        try:
+            key = st.chapter_sort_key(synth_cl, novel_dir)
+        except Exception:
+            continue  # 不符合章目录规范——跳过，不静默乱排
+        earlier = [cl for cl in changelogs
+                   if st.chapter_sort_key(cl, novel_dir) < key]
+        _emit(chap_dir, st.chapter_rel_name(synth_cl, novel_dir),
+              _fold(novel_dir, earlier))
     return written
 
 

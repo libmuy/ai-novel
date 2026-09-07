@@ -763,9 +763,14 @@ def chapter_rel_name(changelog_path, novel_dir):
         chap_dir = parent_dir
     ws = os.path.join(os.path.abspath(novel_dir), WORKSPACE_DIRNAME)
     try:
-        return os.path.relpath(chap_dir, ws)
+        rel = os.path.relpath(chap_dir, ws)
     except ValueError:
         return os.path.basename(chap_dir)
+    # chap_dir 不在 05_工作区/ 下 → relpath 会给出 `../…`（曾把开篇状态抬头写成
+    # 「· ../4」）。这种情况说明传进来的锚点路径不对，退回叶子名而不是往上跳目录。
+    if rel.startswith(".."):
+        return os.path.basename(chap_dir)
+    return rel
 
 
 # ---------------------------------------------------------------------------

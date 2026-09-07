@@ -457,10 +457,84 @@ def _rv_sliding_window(ctx, step, todos, cache):
 
 def _rv_opener_state_outline(ctx, step, todos, cache):
     L = ctx.layout
-    body = ctx.read_path(L.opener_state) or _todo(
-        todos, "本章开篇状态未物化",
-        "跑 `build_state_snapshot.py --write-chapter-openers`（首章用冻结基线）")
+    body = ctx.read_path(L.opener_state)
+    if not body:
+        body = _todo(
+            todos, "本章开篇状态未物化",
+            "跑 `build_state_snapshot.py --write-chapter-openers`（首章用冻结基线）")
+    elif not body.lstrip().startswith("# 本章开篇状态"):
+        # `--write-chapter-openers` 写的抬头恒为「# 本章开篇状态 · <章路径>」并带完整溯源注。
+        # 抬头不对 → 多半是有人用 `--at-chapter` 手跑或手改了（ch0004 首版抬头是
+        # 「# 开篇状态快照 · ../4」）。派生视图不该手搓。
+        todos.append("本章 `00_开篇状态.md` 抬头不是「# 本章开篇状态 · <章路径>」——"
+                     "多半是用 `--at-chapter` 手跑或手改的；请用 "
+                     "`build_state_snapshot.py --write-chapter-openers` 重新物化")
     return [(step.title, body, rel(ctx.novel_dir, L.opener_state))]
+
+
+def _rv_volume_resource_plan(ctx, step, todos, cache):
+    """卷大纲【资源与伏笔规划】的资源 / 财务子表。
+
+    细纲要在章内算清「本章特有的钱 / 数量 / 克扣」（瘦身闸的例外），需要锚点：
+    某资源值多少下品、本阶段财富区间、续命丹价位……节拍表那一行不含这些，
+    ch0004 首版提示词因此让规划师无处取数（灵心草 ≈5 下品在卷大纲子表里、没内联）。
+    """
+    plan = ctx.read_path(ctx.layout.volume_plan)
+    body = extract.read_sections(plan, [
+        "本卷新增资源/道具",
+        "本卷损毁/失去资源",
+        "本卷资源变化轨迹",
+        "本卷财务危机安排",
+    ])
+    if not body.strip():
+        return []
+    lead = ("卷大纲【资源与伏笔规划】的资源 / 财务子表。**本章特有的钱 / 数量 / 克扣要在"
+            "细纲内算清**（单位、折算率、基数、结果），源数字以下表与内联的资源卡为准；"
+            "全书恒定的换算基准仍写指针「见红线包 §X」。\n\n")
+    return [(step.title, lead + body,
+             f"extract:{rel(ctx.novel_dir, ctx.layout.volume_plan)}")]
+
+
+_MAIN_CULTIVATION_RE = re.compile(r"主修[：:]\s*([^\（(，,、；;。\n/]+)")
+
+
+def _rv_cultivation_breakthrough_outline(ctx, step, todos, cache):
+    """突破 / 晋升章：内联主角主修体系的【境界体系】与【破境考验】。
+
+    突破卡模板的【冲突原型】要求「与修炼体系【大境界破境考验】对应」，但首次
+    引气入体（凡人→炼气初期）按体系设计**没有破境考验**（玄元道炼气初期一行
+    破境考验＝「—」）。不内联体系卡，规划师无从判断，只能硬凑戏剧化考验、
+    反而和体系卡打架（ch0004 首版提示词的 #6）。
+    """
+    beat = _beat(ctx, cache)
+    if not beat:
+        return []
+    hay = f"{beat.get('必用模板', '')} {beat.get('核心事件类型', '')}"
+    if not any(k in hay for k in ("突破", "晋升")):
+        return []
+    prot_path = extract.card_path(ctx.novel_dir, extract.Ref("主角", ""))
+    prot = ctx.read_path(prot_path) if prot_path else ""
+    m = _MAIN_CULTIVATION_RE.search(prot)
+    if not m:
+        todos.append("突破章：主角档案里解析不到「主修：<体系>」——"
+                     "无法内联修炼体系【境界体系】/【破境考验】，请手工补")
+        return []
+    system = m.group(1).strip().strip("《》")
+    sys_path = ctx.novel_dir / "02_数据库/01_修炼体系" / f"01_修炼体系_{system}.md"
+    if not sys_path.exists():
+        todos.append(f"突破章：找不到主修体系卡 `01_修炼体系_{system}.md`——"
+                     f"【境界体系】/【破境考验】未内联，请手工补")
+        return []
+    text = ctx.read_path(sys_path)
+    body = extract.read_sections(text, ["【基础定义】", "【境界体系】", "【体系规则】"])
+    if not body.strip():
+        return []
+    lead = (f"主角主修 **{system}**。本章为突破 / 晋升章——**冲突原型须与下表"
+            "【破境考验】列对应**；某境界那一格是「—」的（如炼气初期＝引气入体），"
+            "说明该阶段按体系设计没有正式破境考验，冲突原型写实际发生的身体 / 处境"
+            "考验即可，不要硬凑一个体系外的「考验」。\n\n")
+    title = step.title or f"本章突破 · 主修体系（{system}）境界与破境考验"
+    return [(title, lead + body, f"extract:{rel(ctx.novel_dir, sys_path)}")]
 
 
 _RESOLVERS = {
@@ -480,6 +554,8 @@ _RESOLVERS = {
     "beat_block": _rv_beat_block,
     "sliding_window": _rv_sliding_window,
     "opener_state_outline": _rv_opener_state_outline,
+    "volume_resource_plan": _rv_volume_resource_plan,
+    "cultivation_breakthrough_outline": _rv_cultivation_breakthrough_outline,
 }
 
 
@@ -672,14 +748,60 @@ def _add_dy_and_fh(ctx: Ctx, sec: Section, source_text: str, todos: Optional[lis
     if fh_ids:
         ledger = ctx.data("03_规划/00_伏笔总纲.md")
         vol = ctx.read_path(ctx.layout.volume_foreshadow)
-        rows = extract.ledger_rows(ledger, fh_ids) + extract.ledger_rows(vol, fh_ids)
-        if rows:
-            sec.add(f"本章伏笔 · {'、'.join(fh_ids)}",
-                    "登记以本表为准，**禁止现编伏笔号**：\n\n" + "\n".join(rows) + "\n",
+        body = _fh_registry_block(
+            fh_ids,
+            extract.ledger_rows(ledger, fh_ids),
+            extract.ledger_rows(vol, fh_ids))
+        if body:
+            sec.add(f"本章伏笔 · {'、'.join(fh_ids)}", body,
                     "extract:03_规划/00_伏笔总纲.md")
         elif todos is not None:
             todos.append(f"细纲点名了伏笔 {'、'.join(fh_ids)}，但伏笔总纲 / 卷伏笔册里"
                          f"没有一条对应登记行——伏笔号写错？总纲漏登记？")
+
+
+def _fh_registry_block(fh_ids: list[str], ledger_rows: list[str],
+                       vol_rows: list[str]) -> str:
+    """本章点名伏笔的登记行，**按来源分组**呈现。
+
+    同一个 FH 号在「伏笔总纲」（全书权威）与「卷伏笔册」（埋设表 / 回收表）里往往
+    各有一行，措辞与状态列不一定一致——例如总纲记「活跃」、卷册回收表记
+    「已回收（阶段性）」。这是阶段性回收的**正常表现**（见 `foreshadow_schedule.py`
+    说明），不是矛盾。旧实现把这些异构行裸拼成一张无表头的表，云端会分不清本章
+    到底是推进还是回收（ch0004 首版提示词栽在这里）。现在分来源列出并写明口径。
+    """
+    if not (ledger_rows or vol_rows):
+        return ""
+
+    def _by_id(rows: list[str]) -> dict[str, list[str]]:
+        out: dict[str, list[str]] = {}
+        for r in rows:
+            key = r.strip().strip("|").split("|")[0].strip().strip("*")
+            out.setdefault(key, []).append(r)
+        return out
+
+    lg, vl = _by_id(ledger_rows), _by_id(vol_rows)
+    lines = [
+        "**禁止现编伏笔号。** 下列为本章点名伏笔的登记行，按来源分组，供你核对"
+        "伏笔号 / 名称 / 既有含义：",
+        "",
+        "- 同一伏笔在**伏笔总纲**（全书权威）与**卷伏笔册**（埋设表 / 回收表）里可能各有登记，"
+        "状态列不一定一致（如总纲「活跃」、卷册「已回收（阶段性）」）——这是阶段性回收的"
+        "正常表现，不是矛盾。",
+        "- **本章对某伏笔到底做什么（埋设 / 推进 / 回收）以【已有数据】A 的节拍摘要为准**，"
+        "登记行不作数。",
+        "",
+    ]
+    for fid in fh_ids:
+        if fid not in lg and fid not in vl:
+            continue
+        lines.append(f"**{fid}**")
+        for r in lg.get(fid, []):
+            lines.append(f"- 〔伏笔总纲〕{r}")
+        for r in vl.get(fid, []):
+            lines.append(f"- 〔卷伏笔册〕{r}")
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def _beat_row(plan_text: str, chapter: int) -> Optional[dict]:
@@ -819,11 +941,30 @@ def _sliding_window(ctx: Ctx, todos: list[str]) -> str:
         return _todo(todos, "上一章正文尚未落位，滑动窗口留空",
                      "先把上一章正文落位到 `10_正文/…`，再重拼本提示词")
     tail = extract.tail_text(prev.read_text(encoding="utf-8", errors="ignore"))
-    return ("### 上章结尾原文（最后 500 字，正文须紧密承接其场景与语气）\n\n"
-            "```\n" + tail + "\n```\n\n"
-            "### 上章末尾摘要\n\n"
-            + _todo(todos, "上章 300 字摘要需人工撰写",
-                    "摘要是理解性压缩，工具不代笔；写完粘到本区块"))
+    head = ("### 上章结尾原文（最后 500 字，正文须紧密承接其场景与语气）\n\n"
+            "```\n" + tail + "\n```\n\n### 上章末尾摘要\n\n")
+    # 摘要是理解性压缩、工具不代笔——但也不该每次 --force 重拼就被冲掉。
+    # 存 `00_提示词/上章摘要.md`（无数字前缀：辅助输入，不参与 WS006 产出配对）：
+    # 写过一次就复用，没写过就落一份占位并报 todo。
+    digest = L.prompt_dir / "上章摘要.md"
+    try:
+        saved = digest.read_text(encoding="utf-8").strip() if digest.exists() else ""
+    except OSError:
+        saved = ""
+    if saved and not saved.startswith(">>>"):
+        return head + saved + "\n"
+    if not digest.exists():
+        try:
+            digest.parent.mkdir(parents=True, exist_ok=True)
+            digest.write_text(
+                ">>> 上章 300 字摘要需人工撰写：理解性压缩上一章末尾剧情与局势，"
+                "写好后替换本文件全部内容，重拼提示词即自动带入。\n", encoding="utf-8")
+        except OSError:
+            pass
+    return head + _todo(
+        todos, "上章 300 字摘要需人工撰写",
+        f"写进 `{rel(ctx.novel_dir, digest)}`（替换占位内容），重拼即自动带入；"
+        "工具不代笔")
 
 
 def resolve_prev_manuscript(ctx: Ctx) -> Optional[Path]:

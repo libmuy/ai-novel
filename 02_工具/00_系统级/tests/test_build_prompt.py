@@ -677,6 +677,30 @@ class TestAssemble(unittest.TestCase):
         self.assertEqual(leaks, [])
 
 
+class TestFhRegistryBlock(unittest.TestCase):
+    """assemble._fh_registry_block —— 总纲 / 卷册的异构登记行按来源分组，不裸拼成坏表。"""
+
+    def test_groups_by_source_and_id(self):
+        lg = ["| FH-067 | 弃矿沟古玉共鸣 | 整书 | ... | 卷2 | 活跃 |"]
+        vl = ["| FH-067 | 弃矿沟古玉共鸣 | ... | 活跃(已埋设) |",
+              "| FH-067 | 弃矿沟古玉共鸣 | ... | 已回收（阶段性） |"]
+        out = assemble._fh_registry_block(["FH-067"], lg, vl)
+        self.assertIn("**FH-067**", out)
+        self.assertEqual(out.count("〔伏笔总纲〕"), 1)
+        self.assertEqual(out.count("〔卷伏笔册〕"), 2)
+        # 写明「以节拍摘要为准」，别让云端拿登记行判断推进/回收
+        self.assertIn("节拍摘要为准", out)
+
+    def test_empty_when_no_rows(self):
+        self.assertEqual(assemble._fh_registry_block(["FH-001"], [], []), "")
+
+    def test_bold_id_row_still_grouped(self):
+        vl = ["| **FH-068** | 活矿邪法 | ... |"]
+        out = assemble._fh_registry_block(["FH-068"], [], vl)
+        self.assertIn("**FH-068**", out)
+        self.assertIn("〔卷伏笔册〕", out)
+
+
 class TestBuildPromptCLI(unittest.TestCase):
     """build_prompt.py 的 CLI 集成测试。"""
 

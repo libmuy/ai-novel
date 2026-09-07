@@ -159,6 +159,11 @@ class WorkspaceRule(AuditRule):
 
             # 遍历 prompt_dir 下的所有 markdown 文件
             for prompt_file in prompt_dir.rglob("*.md"):
+                # 配对的产出件恒以数字前缀命名（00_单章细纲.md / 01_正文生成_修订N.md）。
+                # 无数字前缀的是辅助输入（如 上章摘要.md，build_prompt 落它、_sliding_window 读它），
+                # 没有、也不该有「模型输出」配对。
+                if not prompt_file.stem[:1].isdigit():
+                    continue
                 rel_path = prompt_file.relative_to(prompt_dir)
                 matching_output = output_dir / rel_path
                 if not matching_output.exists():

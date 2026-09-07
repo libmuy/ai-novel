@@ -84,6 +84,14 @@ note = "节拍表本章行——摘要是本章事件归属的唯一权威"
 
 [[task."细纲".step]]
 into = "已有数据"
+source = "resolver:volume_resource_plan"
+title = "本卷资源与经济锚点（卷大纲子表）"
+mode = "resolver"
+role = "data"
+note = "卷大纲【资源与伏笔规划】的资源/财务子表——细纲要在章内算清本章特有的钱/数量，节拍行不含这些锚点"
+
+[[task."细纲".step]]
+into = "已有数据"
 source = "layout:protagonist"
 title = "主角档案"
 mode = "whole"
@@ -92,9 +100,17 @@ role = "data"
 [[task."细纲".step]]
 into = "已有数据"
 source = "resolver:cast_cards_beat"
+mode = "sections"
+sections = ["【基础档案】", "【修行档案】", "【角色内核】", "【与主角关系】", "【创作标签】"]
+role = "data"
+note = "出场对象 = 节拍表本章摘要里的全部 @引用（下限，细纲须据剧情补齐）；人物卡只取五块，去【独立故事线】跨章剧透（与正文口径一致）"
+
+[[task."细纲".step]]
+into = "已有数据"
+source = "resolver:cultivation_breakthrough_outline"
 mode = "resolver"
 role = "data"
-note = "出场对象 = 节拍表本章摘要里的全部 @引用（下限，细纲须据剧情补齐）"
+note = "突破/晋升章才追加：主角主修体系的【境界体系】/【破境考验】——冲突原型须与破境考验列对应"
 
 [[task."细纲".step]]
 into = "已有数据"
