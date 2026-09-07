@@ -60,7 +60,10 @@ class WorkspaceRule(AuditRule):
         if current_dir.name in ("00_基线状态", "01_最新状态", "00_基线候选"):
             return
 
-        subdirs = [d for d in current_dir.iterdir() if d.is_dir() and not d.name.startswith(".")]
+        # `.bak` 后缀是 merge_chapter_state.py / rebuild_global_state.py --backup 的写前备份
+        # （gitignore 也忽略），不参与编号合规检查、也不往里递归。
+        subdirs = [d for d in current_dir.iterdir()
+                   if d.is_dir() and not d.name.startswith(".") and not d.name.endswith(".bak")]
         if not subdirs:
             return
 

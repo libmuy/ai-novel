@@ -166,6 +166,18 @@ def _run():
               f"正常应逐章按顺序 merge；确需并入旧章请加 --force，或用 rebuild_global_state.py 全量重折。")
         sys.exit(1)
 
+    # 折叠前把关：本章履历若有关系ID排序错 / 自造字段名，直接拦下——
+    # 这两类问题折进最新状态就污染，事后只能靠 audit + rebuild 收拾（ch0003/ch0004 各栽一次）。
+    cl_errs = st.validate_changelog(target_cl, novel_dir)
+    if cl_errs and not args.force:
+        print(f"\n[阻断] 本章履历有 {len(cl_errs)} 处必须先修的问题，未折叠、未写任何文件：")
+        for e in cl_errs:
+            print(f"  - {e}")
+        print("\n修完 01_状态履历.md 再重跑；确要跳过校验用 --force（不建议）。")
+        sys.exit(2)
+    elif cl_errs:
+        print(f"\n⚠️ --force：跳过 {len(cl_errs)} 处履历校验问题，继续折叠。")
+
     paths = changelogs[:idx + 1]
     resolver = None if args.no_llm else _make_llm_resolver(tools_dir)
     cache = st.load_merge_cache(novel_dir)

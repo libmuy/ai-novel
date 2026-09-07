@@ -383,6 +383,62 @@ class TestRelationId(unittest.TestCase):
         self.assertFalse(st.cast_contains(cast, "角色.柳禾"))
 
 
+class TestValidateChangelog(unittest.TestCase):
+    """折叠前把关：关系ID排序错 / 自造字段名 → merge_chapter_state.py 直接拦下。"""
+
+    def _write(self, td, rows_md):
+        p = os.path.join(td, "01_状态履历.md")
+        with open(p, "w", encoding="utf-8") as f:
+            f.write("| 对象ID | 字段 | 类型 | 值 | 章节号 | 变更时间 | 变更类型 |\n"
+                    "| --- | --- | --- | --- | --- | --- | --- |\n" + rows_md)
+        return p
+
+    def _vocab_novel(self, td):
+        """造一个带最小字段词表的小说目录（validate_changelog 要读词表）。"""
+        novel = os.path.join(td, "n")
+        os.makedirs(os.path.join(novel, "00_通用模板"))
+        with open(os.path.join(novel, "00_通用模板", "03_字段词表.md"), "w", encoding="utf-8") as f:
+            f.write("| 字段名 | 细分类型 |\n|---|---|\n"
+                    "| **境界** | 运算-枚举 |\n| **身体状况** | 描述 |\n"
+                    "| **关系性质** | 运算-枚举 |\n| **甲对乙态度** | 描述 |\n")
+        return novel
+
+    def test_clean_changelog_passes(self):
+        with tempfile.TemporaryDirectory() as td:
+            novel = self._vocab_novel(td)
+            cl = self._write(td,
+                "| 角色.苏砚 | 境界 | 运算-枚举 | 玄元道·炼气·初期 | 0004 | x | 修改 |\n"
+                "| 关系.周莽&苏砚 | 关系性质 | 运算-枚举 | 友谊 | 0004 | x | 新建 |\n")
+            self.assertEqual(st.validate_changelog(cl, novel), [])
+
+    def test_flags_wrong_relation_order(self):
+        with tempfile.TemporaryDirectory() as td:
+            novel = self._vocab_novel(td)
+            cl = self._write(td,
+                "| 关系.苏砚&周莽 | 关系性质 | 运算-枚举 | 友谊 | 0004 | x | 新建 |\n")
+            errs = st.validate_changelog(cl, novel)
+            self.assertEqual(len(errs), 1)
+            self.assertIn("关系.周莽&苏砚", errs[0])
+
+    def test_flags_unregistered_field(self):
+        with tempfile.TemporaryDirectory() as td:
+            novel = self._vocab_novel(td)
+            cl = self._write(td,
+                "| 角色.苏砚 | 修炼状态 | 描述 | 入道 | 0004 | x | 修改 |\n")
+            errs = st.validate_changelog(cl, novel)
+            self.assertEqual(len(errs), 1)
+            self.assertIn("修炼状态", errs[0])
+
+    def test_no_vocab_skips_field_check_but_keeps_relation_check(self):
+        with tempfile.TemporaryDirectory() as td:
+            cl = self._write(td,
+                "| 角色.苏砚 | 随便什么字段 | 描述 | x | 0004 | x | 修改 |\n"
+                "| 关系.苏砚&周莽 | 关系性质 | 运算-枚举 | 友谊 | 0004 | x | 新建 |\n")
+            errs = st.validate_changelog(cl, td)  # td 无词表
+            self.assertEqual(len(errs), 1)
+            self.assertIn("关系.周莽&苏砚", errs[0])
+
+
 class TestHoldingsReverseIndex(unittest.TestCase):
     """W5：write_state_tree 生成 00_持有物品反查.md 派生视图（manifest=True 时）。"""
 

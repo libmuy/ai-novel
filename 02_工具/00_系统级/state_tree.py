@@ -740,6 +740,73 @@ def chapter_sort_key(changelog_path, novel_dir):
     return (int(part), int(vol), int(chap))
 
 
+def _load_field_vocab(novel_dir):
+    """`00_通用模板/03_字段词表.md` → {字段名: 类型}。找不到词表返回 {}（视为不校验）。"""
+    for cand in ("00_通用模板/03_字段词表.md",
+                 os.path.join("..", "..", "00_通用模板", "03_字段词表.md")):
+        p = os.path.join(novel_dir, cand)
+        if os.path.isfile(p):
+            break
+    else:
+        return {}
+    out = {}
+    with open(p, encoding="utf-8", errors="ignore") as f:
+        for line in f:
+            s = line.strip()
+            if not s.startswith("|") or "---" in s or "字段名" in s:
+                continue
+            cells = [c.strip() for c in s.split("|")[1:-1]]
+            if len(cells) >= 2:
+                out[cells[0].replace("*", "").strip()] = cells[1]
+    return out
+
+
+def validate_changelog(changelog_path, novel_dir):
+    """折叠前的确定性把关：扫一份 `01_状态履历.md`，返回**硬错误**列表（空＝可折叠）。
+
+    只拦「折进最新状态就会污染、且事后审计才报」的两类问题——
+      1. `关系.甲&乙` 两端未按 Unicode 序（MIMO / OpenCode 反复肉眼估 CJK 排序踩坑）
+      2. 「字段」列的字段名未在 `03_字段词表.md` 登记（如把「境界」更新写成自造的「修炼状态」）
+    其余语法 / 值域交给 audit_consistency.py。
+    """
+    errs = []
+    vocab = _load_field_vocab(novel_dir)
+    try:
+        with open(changelog_path, encoding="utf-8", errors="ignore") as f:
+            lines = f.readlines()
+    except OSError as e:
+        return [f"读不到履历文件：{e}"]
+    for i, raw in enumerate(lines, 1):
+        s = raw.strip()
+        if not s.startswith("|") or "---" in s or "对象ID" in s:
+            continue
+        cells = [c.strip() for c in s.split("|")[1:-1]]
+        if len(cells) < 4:
+            continue
+        obj_id, field = cells[0], cells[1]
+        if obj_id.startswith(RELATION_PREFIX + "."):
+            try:
+                canon = normalize_relation_id(obj_id)
+            except RelationIdError as e:
+                errs.append(f"第{i}行 关系ID `{obj_id}` 不合规：{e}")
+            else:
+                if canon != obj_id:
+                    errs.append(
+                        f"第{i}行 关系ID `{obj_id}` 两端未按 Unicode 码位排序，应为 `{canon}`。"
+                        f"（甲对乙/乙对甲态度字段：规整后甲乙对调，字段值也要跟着对调）")
+        if vocab and field not in vocab:
+            errs.append(
+                f"第{i}行 字段「{field}」未在 03_字段词表.md 登记"
+                f"（境界变化用 `境界`、身体状况用 `身体状况` 等规范字段，不要自造字段名）")
+    # 去重、保序
+    seen, out = set(), []
+    for e in errs:
+        if e not in seen:
+            seen.add(e)
+            out.append(e)
+    return out
+
+
 def iter_workspace_changelogs(novel_dir):
     """返回 05_工作区/ 下所有 01_状态履历.md 的绝对路径，按 (部, 卷, 章) 排序。"""
     ws = os.path.join(novel_dir, WORKSPACE_DIRNAME)
