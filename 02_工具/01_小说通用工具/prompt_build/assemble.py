@@ -642,10 +642,41 @@ _EVENT_TPL = {
 }
 
 
+# 每份细纲都有的标准字段区块——标题里的事件关键词（尤其【道义与感悟】里的「道义」）
+# 不构成「本章需要该事件卡」的信号，扫描前先剔除。
+_OUTLINE_STD_HEADINGS = {
+    "基础信息", "出场对象", "出场对象一览", "场景列表", "章级钩子",
+    "道义与感悟", "自检预检", "本章突破卡", "待确认清单", "自检确认",
+    "已裁决事项", "0. 上下文滑动窗口",
+}
+_SCENE_HEADING_RE = re.compile(r"^(第\s*\d+\s*场景|上章|与正文衔接)")
+
+
+def _norm_heading(t: str) -> str:
+    return t.strip().strip("【】").strip()
+
+
 def _event_templates(outline_text: str) -> list[tuple[str, str]]:
-    """细纲里有【战斗结算要素】/【突破】等区块 → 追加对应事件模板。"""
+    """细纲需要哪个事件卡模板 → 追加。
+
+    优先看细纲【基础信息】的「核心事件类型 / 必用模板」（与节拍表口径一致）；
+    取不到（旧格式细纲）才退回扫非标准区块标题——**标准细纲字段一律剔除**，
+    否则每份细纲都有的【道义与感悟】会把「事件与感悟卡模板」误拉进来。
+    """
+    node = extract.field_value(outline_text, "关联卷大纲节点")
+    m_kind = re.search(r"核心事件类型[：:]\s*([^/｜|]+)", node)
+    m_tpl = re.search(r"必用模板[：:]\s*([^/｜|]+)", node)
+    if m_kind or m_tpl:
+        hay = f"{m_tpl.group(1) if m_tpl else ''} {m_kind.group(1) if m_kind else ''}"
+        for key, (label, path) in _EVENT_TPL.items():
+            if key in hay:
+                return [(label, path)]
+        return []
+
     out, seen = [], set()
-    titles = " ".join(extract.section_titles(outline_text, max_level=3))
+    titles = " ".join(t for t in extract.section_titles(outline_text, max_level=3)
+                      if _norm_heading(t) not in _OUTLINE_STD_HEADINGS
+                      and not _SCENE_HEADING_RE.match(t.strip()))
     for key, (label, path) in _EVENT_TPL.items():
         if key in titles and path not in seen:
             seen.add(path)

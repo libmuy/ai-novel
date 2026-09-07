@@ -677,6 +677,36 @@ class TestAssemble(unittest.TestCase):
         self.assertEqual(leaks, [])
 
 
+class TestEventTemplates(unittest.TestCase):
+    """assemble._event_templates —— 标准细纲字段【道义与感悟】不得把事件与感悟卡模板误拉进来。"""
+
+    _EAI = "02_卡片模板/10_事件与感悟卡模板.md"
+    _BP = "02_卡片模板/09_主角突破卡模板.md"
+
+    def _paths(self, outline):
+        return [p for _, p in assemble._event_templates(outline)]
+
+    def test_standard_field_does_not_trigger(self):
+        """每份细纲都有的「## 【道义与感悟】」不算「本章需要事件与感悟卡」的信号。"""
+        outline = ("# 细纲\n## 【基础信息】\n| 关联卷大纲节点 | 第4章 / 核心事件类型：突破/晋升 |\n"
+                   "## 【场景列表】\n### 第1场景\n内容\n## 【道义与感悟】\n| 本章落地道义 | X |\n")
+        self.assertEqual(self._paths(outline), [self._BP])
+
+    def test_core_event_type_decides_when_present(self):
+        outline = ("# 细纲\n## 【基础信息】\n| 关联卷大纲节点 | 第3章 / 核心事件类型：抉择/道义 / 钩子：重钩 |\n"
+                   "## 【道义与感悟】\n内容\n")
+        self.assertEqual(self._paths(outline), [self._EAI])
+
+    def test_fallback_scan_excludes_standard_headings(self):
+        """没有「关联卷大纲节点」字段（旧格式）时退回扫标题，仍剔除标准字段。"""
+        outline = "# 细纲\n## 出场对象\n表\n## 【场景列表】\n### 第1场景\nx\n## 道义与感悟\n无\n"
+        self.assertEqual(self._paths(outline), [])
+
+    def test_fallback_scan_still_catches_real_event_block(self):
+        outline = "# 细纲\n## 出场对象\n表\n## 【战斗设计】\n打\n## 道义与感悟\n无\n"
+        self.assertEqual(self._paths(outline), ["02_卡片模板/08_战斗结算模板.md"])
+
+
 class TestFhRegistryBlock(unittest.TestCase):
     """assemble._fh_registry_block —— 总纲 / 卷册的异构登记行按来源分组，不裸拼成坏表。"""
 
@@ -817,7 +847,11 @@ class TestManifestGolden(TestAssemble):
     #     「## 执行要求」两行；② 00_通用写作规则_校验版 与 00_红线包/00_文风 加了 §6.3
     #     「计谋/推演类内心活动限制」，随内联进【必读规则】/【输出后自检】。
     #   - OUTLINE：00_通用写作规则_生成版 §6.3 随内联进【必读模板】。
-    GOLDEN_MANUSCRIPT = "7a90fbddc0e5ad01964c4634c7c589d1c5d44e7d1bd81ac9d24126e44d52c9e2"
+    # 2026-09-07：_event_templates 修好误触发——标准细纲字段（每份都有的【道义与感悟】）
+    #   里的「道义」二字不再把「事件与感悟卡模板」误拉进正文提示词；有「关联卷大纲节点」
+    #   字段时优先按其中的「核心事件类型/必用模板」判定。fixture 走后一路（无该字段、
+    #   section 扫描剔除标准字段），不再内联 10_事件与感悟卡模板 → MANUSCRIPT 哈希缩小。
+    GOLDEN_MANUSCRIPT = "ad4b2753fc4b562e5324d4b15386d8d879e30448227dcd9c21bdc693833e18ef"
     GOLDEN_OUTLINE = "b4cf3410941f22507711b25f70b89abe42c6e7efab7c98b108dea572f1f3e280"
 
     def _hash(self, text):
