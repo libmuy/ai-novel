@@ -162,6 +162,23 @@ def _chapter_number(chap_rel):
     return m.group(1) if m else "0000"
 
 
+def _resolve_chapter_dir(chapter_dir):
+    """接受完整路径，也接受相对小说根的短路径（`05_工作区/...`）——
+    后者在 `01_小说数据/*/` 下逐本试。"""
+    if os.path.isdir(chapter_dir):
+        return os.path.abspath(chapter_dir)
+    norm = chapter_dir.replace("\\", "/")
+    if "05_工作区" in norm:
+        import glob
+        tail = norm[norm.index("05_工作区"):]
+        repo_root = os.path.abspath(os.path.join(_HERE, "..", ".."))
+        for base in sorted(glob.glob(os.path.join(repo_root, "01_小说数据", "*"))):
+            cand = os.path.join(base, tail)
+            if os.path.isdir(cand):
+                return os.path.abspath(cand)
+    return os.path.abspath(chapter_dir)
+
+
 def _dynamic_fields_for(novel_dir, prefix, name):
     """新 角色/势力 对象的字段清单：优先卡片「## 动态字段清单」，回退兜底集。返回 [(field, type), ...]。"""
     try:
@@ -205,7 +222,7 @@ def build_changelog_skeleton(chapter_dir, novel_dir=None, *, force=False, verbos
     """为一章生成预填的 01_状态履历.md 骨架。返回写入路径。"""
     from prompt_build.extract import parse_cast
 
-    chapter_dir = os.path.abspath(chapter_dir)
+    chapter_dir = _resolve_chapter_dir(chapter_dir)
     if os.path.basename(chapter_dir) == "02_状态":
         state_dir = chapter_dir
     elif os.path.isdir(os.path.join(chapter_dir, "02_状态")):

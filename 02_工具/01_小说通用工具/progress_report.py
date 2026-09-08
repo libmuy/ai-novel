@@ -66,6 +66,8 @@ class Chapter:
     has_changelog: bool = False
     has_opener: bool = False
     merged: bool = False
+    has_landing_check: bool = False    # 02_状态/03_细纲落地核对.md 存在
+    landing_check_open: bool = False   # 该表仍有未锚定项（未勾选复选框 / 残留占位符 / 未 waive 的 ❌未落地）
     declared_outline: str | None = None
     declared_manuscript: str | None = None
 
@@ -191,6 +193,18 @@ def collect(novel_dir: Path) -> Report:
             if pr.is_dir():
                 c.revision_rounds = len(list(pr.glob("01_正文生成_修订*.md")))
 
+            lc = st / "03_细纲落地核对.md"
+            c.has_landing_check = lc.exists()
+            if c.has_landing_check:
+                # `>` 引用行是给人看的说明（本身含 `❌未落地` 等字样），不参与判定
+                body = [ln for ln in lc.read_text(encoding="utf-8", errors="ignore").splitlines()
+                        if not ln.lstrip().startswith(">")]
+                c.landing_check_open = (
+                    any(re.match(r"\s*-\s*\[\s*\]\s+\S", ln) for ln in body)
+                    or any("〔待填：正文" in ln for ln in body)
+                    or any("❌未落地" in ln and "waive" not in ln.lower() and "豁免" not in ln
+                           for ln in body))
+
     # ── 状态层折叠进度
     sync = novel_dir / SYNC_REL
     if sync.exists():
@@ -255,19 +269,39 @@ def reconcile(novel_dir: Path, declared: dict[str, str], rep: Report) -> list[tu
                         f"`{c.manuscript.relative_to(novel_dir).as_posix()}`"))
 
     # PROGRESS003：声明「定稿」但流水线上还缺件（成熟度显然超前于事实）
+    #   「定稿」＝「校验通过，可被引用」（见 `00_进度.md` 图例）——缺件即伪造下游前置，判 error。
+    #   「待校验」＝结构齐但校验未做完，是正当中间态——只对「连正文都没落位」这类硬矛盾报 warning。
     for c in rep.chapters:
         if c.declared_manuscript == "定稿":
             if not c.has_changelog:
-                out.append(("warning", "PROGRESS003",
+                out.append(("error", "PROGRESS003",
                             f"{c.cid} 正文标「定稿」，但本章缺 `02_状态/01_状态履历.md`"))
             elif not c.merged:
-                out.append(("warning", "PROGRESS003",
+                out.append(("error", "PROGRESS003",
                             f"{c.cid} 正文标「定稿」且有履历，但未折叠进 `01_最新状态/`"
                             f"（当前折叠至 {rep.merged_upto}）——跑 `merge_chapter_state.py`"))
-        if c.declared_manuscript in ("定稿", "待校验") and c.cold_rounds == 0:
+            if c.cold_rounds == 0:
+                out.append(("error", "PROGRESS003",
+                            f"{c.cid} 正文标「定稿」，但无冷读记录"
+                            f"（`02_状态/02_正文校验记录.md` 无 `## 冷读` 分节）——"
+                            f"「定稿」＝校验通过，冷读循环未跑就转定稿即伪造前置"))
+        elif c.declared_manuscript == "待校验" and c.cold_rounds == 0:
             out.append(("warning", "PROGRESS003",
-                        f"{c.cid} 正文标「{c.declared_manuscript}」，但无冷读记录"
-                        f"（`02_状态/02_正文校验记录.md` 无 `## 冷读` 分节）"))
+                        f"{c.cid} 正文标「待校验」，还没有冷读记录——校验循环（`review_manuscript.py`）尚未开始"))
+
+        # PROGRESS005：细纲落地核对表（步骤 3.5）缺失或仍有未锚定项
+        if c.declared_manuscript == "定稿":
+            if not c.has_landing_check:
+                out.append(("error", "PROGRESS005",
+                            f"{c.cid} 正文标「定稿」但缺细纲落地核对表 `02_状态/03_细纲落地核对.md`——"
+                            f"跑 `build_landing_checklist.py <本章目录>` 生成、逐条锚定"))
+            elif c.landing_check_open:
+                out.append(("error", "PROGRESS005",
+                            f"{c.cid} 细纲落地核对表仍有未锚定项"
+                            f"（未勾选复选框 / 残留占位符 / 未 waive 的 `❌未落地`）——清完再转定稿"))
+        elif c.declared_manuscript == "待校验" and c.has_landing_check and c.landing_check_open:
+            out.append(("warning", "PROGRESS005",
+                        f"{c.cid} 细纲落地核对表已生成但还有未锚定项——转定稿前要清完"))
     return out
 
 
@@ -290,20 +324,27 @@ def render_derived(rep: Report) -> str:
         "",
         "## 一、章节流水线",
         "",
-        "| 章 | 细纲 | 声明 | 正文(汉字) | 声明 | 冷读记录节 | 云端返修 | 履历 | 开篇状态 | 已折叠 |",
-        "|---|---|---|---|---|---|---|---|---|---|",
+        "| 章 | 细纲 | 声明 | 正文(汉字) | 声明 | 冷读记录节 | 云端返修 | 落地核对 | 履历 | 开篇状态 | 已折叠 |",
+        "|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for c in rep.chapters:
-        L.append("| {cid} | {o} | {od} | {w} | {md} | {cr} | {rr} | {cl} | {op} | {mg} |".format(
+        if not c.has_landing_check:
+            lc = "—"
+        elif c.landing_check_open:
+            lc = "○"          # 已生成、仍有未锚定项
+        else:
+            lc = "✔"
+        L.append("| {cid} | {o} | {od} | {w} | {md} | {cr} | {rr} | {lc} | {cl} | {op} | {mg} |".format(
             cid=c.cid,
             o="✔" if c.outline else "—", od=c.declared_outline or "—",
             w=c.words or "—", md=c.declared_manuscript or "—",
             cr=c.cold_rounds or "—", rr=c.revision_rounds or "—",
+            lc=lc,
             cl="✔" if c.has_changelog else "—",
             op="✔" if c.has_opener else "—",
             mg="✔" if c.merged else "—"))
     if not rep.chapters:
-        L.append("| （尚无章节） | — | — | — | — | — | — | — | — | — |")
+        L.append("| （尚无章节） | — | — | — | — | — | — | — | — | — | — |")
 
     L += ["", f"状态树折叠至 **{rep.merged_upto}**，共 {rep.state_objects} 个对象。", "",
           "## 二、设定层", "", "| 文件 | 体量 | 进度表声明 |", "|---|---|---|"]
@@ -334,6 +375,7 @@ def render_text(rep: Report) -> str:
                  f"  正文={c.declared_manuscript or '未登记'}"
                  f" {c.words or 0} 字  冷读记录 {c.cold_rounds} 节"
                  f"  返修 {c.revision_rounds} 轮"
+                 f"  落地核对{'✔' if c.has_landing_check and not c.landing_check_open else ('○' if c.has_landing_check else '✘')}"
                  f"  履历{'✔' if c.has_changelog else '✘'}"
                  f"  折叠{'✔' if c.merged else '✘'}")
     L.append("")
@@ -369,6 +411,8 @@ def main() -> int:
             "chapters": [{
                 "章": c.cid, "细纲声明": c.declared_outline, "正文声明": c.declared_manuscript,
                 "汉字": c.words, "冷读记录节": c.cold_rounds, "返修轮": c.revision_rounds,
+                "落地核对": c.has_landing_check and not c.landing_check_open,
+                "落地核对未清": c.has_landing_check and c.landing_check_open,
                 "履历": c.has_changelog, "已折叠": c.merged,
             } for c in rep.chapters],
             "findings": [{"severity": lv, "code": c, "message": m} for lv, c, m in rep.findings],

@@ -84,6 +84,12 @@ def build_novel_fixture(temp_dir: Path, **opts) -> Path:
     for i in range(1, opts.get("revision_count", 0) + 1):
         _write(novel_dir / f"05_工作区/03_第01部/03_卷01/03_章0001/00_提示词/01_正文生成_修订{i}.md", f"修订 {i}")
 
+    # 细纲落地核对表（03_细纲落地核对.md）；默认建一张全部锚定完的干净表
+    landing = opts.get("landing_check", "# 落地核对\n\n- [x] 场景钩子：X\n      → 锚点：正文「某句」\n")
+    if landing is not None:
+        _write(novel_dir / "05_工作区/03_第01部/03_卷01/03_章0001/02_状态/03_细纲落地核对.md", landing)
+
+
     # 同步状态
     merged_upto = opts.get("merged_upto", "—")
     sync_text = f"# 同步状态\n\n折叠至章: {merged_upto}\n对象总数: 100\n"
@@ -471,6 +477,72 @@ class TestReconcile(unittest.TestCase):
 
         # 应该没有任何对账项
         self.assertEqual(len(findings), 0)
+
+    def _finalized(self, **extra):
+        """帮手：正文标「定稿」的最小 fixture，其余流水线件默认齐全。"""
+        base = dict(
+            progress_table="| 文件 | 状态 |\n|---|---|\n"
+                           "| `10_正文/01_第01部/01_卷01/章0001.md` | 定稿 |\n",
+            has_changelog=True, merged_upto="章0001",
+            cold_read_record="# 记录\n## 冷读1\n内容\n",
+        )
+        base.update(extra)
+        novel_dir = build_novel_fixture(self.tmp, **base)
+        declared = progress_report.declared_status(novel_dir)
+        rep = progress_report.collect(novel_dir)
+        return progress_report.reconcile(novel_dir, declared, rep)
+
+    def test_progress003_no_cold_read_is_error_when_finalized(self):
+        """正文标「定稿」却没冷读记录 → PROGRESS003 且级别为 error。"""
+        findings = self._finalized(cold_read_record=None)
+        p003 = [lv for lv, code, _ in findings if code == "PROGRESS003"]
+        self.assertTrue(p003)
+        self.assertIn("error", p003)
+
+    def test_progress003_no_cold_read_is_warning_when_pending(self):
+        """正文标「待校验」没冷读记录 → PROGRESS003 但只是 warning。"""
+        novel_dir = build_novel_fixture(
+            self.tmp,
+            progress_table="| 文件 | 状态 |\n|---|---|\n"
+                           "| `10_正文/01_第01部/01_卷01/章0001.md` | 待校验 |\n",
+            cold_read_record=None,
+        )
+        declared = progress_report.declared_status(novel_dir)
+        rep = progress_report.collect(novel_dir)
+        findings = progress_report.reconcile(novel_dir, declared, rep)
+        lvls = {code: lv for lv, code, _ in findings}
+        self.assertEqual(lvls.get("PROGRESS003"), "warning")
+
+    def test_progress005_missing_landing_check_blocks_finalize(self):
+        """正文标定稿但没有 03_细纲落地核对.md → PROGRESS005 error。"""
+        findings = self._finalized(landing_check=None)
+        p005 = [lv for lv, code, _ in findings if code == "PROGRESS005"]
+        self.assertEqual(p005, ["error"])
+
+    def test_progress005_open_items_block_finalize(self):
+        """落地核对表里还有未勾选项 → PROGRESS005 error。"""
+        findings = self._finalized(
+            landing_check="# 落地核对\n\n- [ ] 场景钩子：X\n"
+                          "      → 锚点：〔待填：正文「≤12字」／❌未落地（原因）〕\n")
+        p005 = [lv for lv, code, _ in findings if code == "PROGRESS005"]
+        self.assertEqual(p005, ["error"])
+
+    def test_progress005_waived_items_pass(self):
+        """全部锚定或显式豁免 → 不报 PROGRESS005。"""
+        findings = self._finalized(
+            landing_check="# 落地核对\n\n"
+                          "- [x] 场景钩子：X\n      → 锚点：正文「某句」\n"
+                          "- [x] 要点：Y\n      → 锚点：豁免：本章不涉及\n")
+        codes = [code for _, code, _ in findings]
+        self.assertNotIn("PROGRESS005", codes)
+
+    def test_progress005_unresolved_x_mark_blocks(self):
+        """标了 ❌未落地 又没 waive → 仍拦。"""
+        findings = self._finalized(
+            landing_check="# 落地核对\n\n- [x] 场景钩子：X\n"
+                          "      → 锚点：❌未落地（正文缺这句连接性交代）\n")
+        p005 = [lv for lv, code, _ in findings if code == "PROGRESS005"]
+        self.assertEqual(p005, ["error"])
 
 
 class TestProgressRule(unittest.TestCase):

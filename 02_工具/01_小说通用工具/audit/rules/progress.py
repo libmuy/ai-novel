@@ -32,7 +32,11 @@ _SUGGEST = {
                    "产物落位却不登记，正是这个文件历来滞后的方式",
     "PROGRESS003": "要么补齐缺的那一步，要么把成熟度降回实际阶段——"
                    "成熟度是下游任务的前置门禁，超前声明等于伪造前置",
+    "PROGRESS005": "跑 `build_landing_checklist.py <本章目录>` 生成落地核对表，"
+                   "逐条在正文里锚定或标 `❌未落地`；清完未锚定项再转「定稿」",
 }
+
+_SEV_RANK = {"error": 3, "warning": 2, "info": 1}
 
 
 class ProgressRule(AuditRule):
@@ -61,7 +65,9 @@ class ProgressRule(AuditRule):
         sev_of: dict[str, str] = {}
         for lv, code, msg in rep.findings:
             by_code.setdefault(code, []).append(msg)
-            sev_of[code] = lv
+            # 同一 code 可能同时有 error / warning 实例（不同章）——取最强的
+            if _SEV_RANK.get(lv, 0) >= _SEV_RANK.get(sev_of.get(code, ""), 0):
+                sev_of[code] = lv
 
         findings: List[Finding] = []
         for code, msgs in sorted(by_code.items()):
