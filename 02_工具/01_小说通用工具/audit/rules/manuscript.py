@@ -21,7 +21,32 @@ class ManuscriptRule(AuditRule):
             return findings
 
         ref_pattern = re.compile(r"@(地名|势力|人物|类型|书籍|伏笔|区域)\.")
+        heading_re = re.compile(r"^\s{0,3}#{1,6}\s")
         resolver = ReferenceResolver(context)
+
+        # MANUSCRIPT003：正文首行是 Markdown 标题（`# 第04章` 之类），
+        # 而同书其它章正文直接以散文起头——体例不一致（正文是读者/TTS 成稿，
+        # 章号在 `00_进度.md` 与目录里，不进散文）。跨章自校准：只在「多数章不带」时报。
+        def _starts_with_heading(fi) -> bool:
+            for ln in fi.content.splitlines():
+                if ln.strip():
+                    return bool(heading_re.match(ln))
+            return False
+
+        offenders = [fi for fi in manuscript_files if _starts_with_heading(fi)]
+        clean_n = len(manuscript_files) - len(offenders)
+        if offenders and clean_n >= max(1, len(manuscript_files) // 2):
+            findings.append(Finding(
+                severity=Severity.ERROR,
+                rule=self.name,
+                code="MANUSCRIPT003",
+                message=f"{len(offenders)} 章正文以 Markdown 标题起头，与同书其它 {clean_n} 章体例不一致"
+                        f"（正文直接散文起头，章号进 `00_进度.md`/目录不进正文）",
+                file=offenders[0].relative_path,
+                line=1,
+                suggestion="删掉正文文件开头的 `# 第NN章` 之类标题行；ch1~3 是范式",
+                locations=[f"{fi.relative_path}:第1行" for fi in offenders],
+            ))
 
         for fi in manuscript_files:
             lines = fi.content.splitlines()

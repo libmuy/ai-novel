@@ -95,6 +95,28 @@ class TestAuditEngine(unittest.TestCase):
         codes = [f.code for f in findings]
         self.assertIn("MANUSCRIPT001", codes)
 
+    def test_manuscript003_leading_heading_inconsistent(self):
+        ms = self.novel_dir / "10_正文" / "01_第01部" / "01_卷01"
+        ms.mkdir(parents=True, exist_ok=True)
+        (ms / "章0001.md").write_text("苏砚先侧耳听了三息。\n", encoding="utf-8")
+        (ms / "章0002.md").write_text("他站了出来。\n", encoding="utf-8")
+        (ms / "章0003.md").write_text("# 第03章\n\n背上的麻布条绷紧。\n", encoding="utf-8")
+
+        findings = ManuscriptRule().run(AuditContext(self.novel_dir))
+        m003 = [f for f in findings if f.code == "MANUSCRIPT003"]
+        self.assertEqual(len(m003), 1)
+        self.assertEqual(m003[0].severity, Severity.ERROR)
+        self.assertTrue(any("章0003" in loc for loc in m003[0].locations))
+
+    def test_manuscript003_silent_when_all_consistent(self):
+        ms = self.novel_dir / "10_正文" / "01_第01部" / "01_卷01"
+        ms.mkdir(parents=True, exist_ok=True)
+        (ms / "章0001.md").write_text("散文起头一。\n", encoding="utf-8")
+        (ms / "章0002.md").write_text("散文起头二。\n", encoding="utf-8")
+
+        codes = [f.code for f in ManuscriptRule().run(AuditContext(self.novel_dir))]
+        self.assertNotIn("MANUSCRIPT003", codes)
+
     # ---- manuscript_lexicon：正文禁用词 ----
 
     def _run_lexicon(self, manuscript: str, wordlist=None):
