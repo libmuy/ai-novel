@@ -30,6 +30,9 @@ def _load_state_helpers():
 
 
 def _load_field_vocab(novel_dir: Path, context: AuditContext) -> Dict[str, str]:
+    # 与 02_工具/00_系统级/state_tree.py:_load_field_vocab 逻辑等价（跨小节逐行扫
+    # `| 字段名 | 类型 | … |`）。改解析规则务必两处同步——validate_changelog 与本规则
+    # 对「字段是否已登记」必须是同一口径。
     vocab_rel = "00_通用模板/03_字段词表.md"
     fi = context.file_map.get(vocab_rel)
     if not fi:

@@ -761,16 +761,31 @@ def _load_field_vocab(novel_dir):
     return out
 
 
+CHANGE_TYPES = {"新建", "修改", "移除"}
+SKELETON_PLACEHOLDER_MARKERS = ("〔待填", "待填/删", "〔待填；")
+
+
 def validate_changelog(changelog_path, novel_dir):
     """折叠前的确定性把关：扫一份 `01_状态履历.md`，返回**硬错误**列表（空＝可折叠）。
 
-    只拦「折进最新状态就会污染、且事后审计才报」的两类问题——
+    只拦「折进最新状态就会污染、且事后审计才报」的问题——
       1. `关系.甲&乙` 两端未按 Unicode 序（MIMO / OpenCode 反复肉眼估 CJK 排序踩坑）
       2. 「字段」列的字段名未在 `03_字段词表.md` 登记（如把「境界」更新写成自造的「修炼状态」）
-    其余语法 / 值域交给 audit_consistency.py。
+      3. 「值」列（描述字段）里塞进了别的注册字段名的「字段名：」标签
+         （ch4 教训：古玉的物理状态/神魂链接变化被写进「附加说明」里加前缀，绕过了检查 2）
+      4. 「变更类型」列非法（非 新建/修改/移除）
+      5. 「类型」列非法，或与词表登记类型冲突
+      6. 骨架占位符残留（`build_state_snapshot.py --changelog-skeleton` 的 `〔待填…〕` 没替换）
+    其余语法 / 值域交给 audit_consistency.py。字段词表加载逻辑与
+    `02_工具/01_小说通用工具/audit/rules/state.py:_load_field_vocab` 等价，改一处两处都要同步。
     """
     errs = []
     vocab = _load_field_vocab(novel_dir)
+    # 检查 3 用：注册字段名 → 「分句起始 + 字段名 + 冒号」的行内标签正则
+    label_pats = {
+        name: re.compile(r"(?:^|[\s。；;，、）)])" + re.escape(name) + r"[：:]")
+        for name in vocab
+    } if vocab else {}
     try:
         with open(changelog_path, encoding="utf-8", errors="ignore") as f:
             lines = f.readlines()
@@ -783,7 +798,7 @@ def validate_changelog(changelog_path, novel_dir):
         cells = [c.strip() for c in s.split("|")[1:-1]]
         if len(cells) < 4:
             continue
-        obj_id, field = cells[0], cells[1]
+        obj_id, field, ftype, value = cells[0], cells[1], cells[2], cells[3]
         if obj_id.startswith(RELATION_PREFIX + "."):
             try:
                 canon = normalize_relation_id(obj_id)
@@ -798,6 +813,31 @@ def validate_changelog(changelog_path, novel_dir):
             errs.append(
                 f"第{i}行 字段「{field}」未在 03_字段词表.md 登记"
                 f"（境界变化用 `境界`、身体状况用 `身体状况` 等规范字段，不要自造字段名）")
+        # 检查 3：描述值里塞了别的注册字段名的「X：」标签
+        for name, pat in label_pats.items():
+            if name != field and pat.search(value):
+                errs.append(
+                    f"第{i}行 「{field}」的值里塞进了「{name}：…」标签——"
+                    f"「{name}」应作为独立一行记录，不要并进描述字段。")
+                break
+        # 检查 4：变更类型（空 / `-` 等占位视为「未标注」，放行）
+        if (len(cells) >= 7 and cells[6] not in NUMERIC_EMPTY_VALUES
+                and cells[6] not in CHANGE_TYPES):
+            errs.append(
+                f"第{i}行 变更类型「{cells[6]}」非法，只能是 新建 / 修改 / 移除。")
+        # 检查 5：类型列
+        if ftype not in VALID_MERGE_TYPES:
+            errs.append(
+                f"第{i}行 类型列「{ftype}」非法（应为 运算-数值 / 运算-枚举 / 运算-列表 / 描述；"
+                f"常见坑：全角「—」当「-」）。")
+        elif field in vocab and vocab[field] in VALID_MERGE_TYPES and ftype != vocab[field]:
+            errs.append(
+                f"第{i}行 「{field}」类型写「{ftype}」，词表登记为「{vocab[field]}」。")
+        # 检查 6：骨架占位符残留
+        if any(m in value for m in SKELETON_PLACEHOLDER_MARKERS):
+            errs.append(
+                f"第{i}行 值仍是骨架占位符（`〔待填…〕`）未替换。"
+                f"本章该字段无变化就删掉整行。")
     # 去重、保序
     seen, out = set(), []
     for e in errs:

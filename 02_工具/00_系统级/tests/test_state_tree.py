@@ -400,7 +400,9 @@ class TestValidateChangelog(unittest.TestCase):
         with open(os.path.join(novel, "00_通用模板", "03_字段词表.md"), "w", encoding="utf-8") as f:
             f.write("| 字段名 | 细分类型 |\n|---|---|\n"
                     "| **境界** | 运算-枚举 |\n| **身体状况** | 描述 |\n"
-                    "| **关系性质** | 运算-枚举 |\n| **甲对乙态度** | 描述 |\n")
+                    "| **关系性质** | 运算-枚举 |\n| **甲对乙态度** | 描述 |\n"
+                    "| **附加说明** | 描述 |\n| **物理状态** | 描述 |\n"
+                    "| **神魂链接** | 描述 |\n")
         return novel
 
     def test_clean_changelog_passes(self):
@@ -437,6 +439,56 @@ class TestValidateChangelog(unittest.TestCase):
             errs = st.validate_changelog(cl, td)  # td 无词表
             self.assertEqual(len(errs), 1)
             self.assertIn("关系.周莽&苏砚", errs[0])
+
+    def test_flags_inline_label_in_description(self):
+        """ch4 教训：古玉的物理/神魂链接变化塞进「附加说明」里加「神魂链接：」前缀。"""
+        with tempfile.TemporaryDirectory() as td:
+            novel = self._vocab_novel(td)
+            cl = self._write(td,
+                "| 物品.古玉 | 附加说明 | 描述 | 来历不明的异宝。神魂链接：已建立。物理状态：凉透。 | 0004 | x | 修改 |\n")
+            errs = st.validate_changelog(cl, novel)
+            self.assertTrue(any("标签" in e and ("神魂链接" in e or "物理状态" in e)
+                                for e in errs), errs)
+
+    def test_allows_field_name_in_prose_without_label(self):
+        """描述里自然提到字段名、但没有「字段名：」标签形态 → 不拦。"""
+        with tempfile.TemporaryDirectory() as td:
+            novel = self._vocab_novel(td)
+            cl = self._write(td,
+                "| 物品.古玉 | 附加说明 | 描述 | 与苏砚的神魂链接已经稳固，物理状态是贴身佩戴。 | 0004 | x | 修改 |\n")
+            self.assertEqual(st.validate_changelog(cl, novel), [])
+
+    def test_flags_bad_change_type(self):
+        with tempfile.TemporaryDirectory() as td:
+            novel = self._vocab_novel(td)
+            cl = self._write(td,
+                "| 角色.苏砚 | 境界 | 运算-枚举 | 玄元道·炼气·初期 | 0004 | x | 突破 |\n")
+            errs = st.validate_changelog(cl, novel)
+            self.assertTrue(any("变更类型" in e for e in errs), errs)
+
+    def test_flags_type_column_mismatch(self):
+        with tempfile.TemporaryDirectory() as td:
+            novel = self._vocab_novel(td)
+            cl = self._write(td,
+                "| 角色.苏砚 | 身体状况 | 运算-枚举 | 受伤 | 0004 | x | 修改 |\n")
+            errs = st.validate_changelog(cl, novel)
+            self.assertTrue(any("身体状况" in e and "词表登记" in e for e in errs), errs)
+
+    def test_flags_illegal_type_column(self):
+        with tempfile.TemporaryDirectory() as td:
+            novel = self._vocab_novel(td)
+            cl = self._write(td,
+                "| 角色.苏砚 | 身体状况 | 描 述 | 受伤 | 0004 | x | 修改 |\n")
+            errs = st.validate_changelog(cl, novel)
+            self.assertTrue(any("类型列" in e for e in errs), errs)
+
+    def test_flags_placeholder_left(self):
+        with tempfile.TemporaryDirectory() as td:
+            novel = self._vocab_novel(td)
+            cl = self._write(td,
+                "| 角色.苏砚 | 身体状况 | 描述 | 〔待填；本章无变化则删除本行〕 | 0004 | x | 修改 |\n")
+            errs = st.validate_changelog(cl, novel)
+            self.assertTrue(any("占位符" in e for e in errs), errs)
 
 
 class TestHoldingsReverseIndex(unittest.TestCase):

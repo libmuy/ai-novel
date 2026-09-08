@@ -34,7 +34,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import state_tree as st  # noqa: E402
 from state_lock import acquire_until_exit, StateLockError  # noqa: E402
 from state_tree import records_diff, load_state_tree, StateMergeError, CHANGELOG_FILENAME  # noqa: E402
-from merge_chapter_state import _make_llm_resolver  # noqa: E402
+from merge_chapter_state import _make_llm_resolver, _run_state_audit_gate  # noqa: E402
 
 
 def main():
@@ -53,6 +53,8 @@ def _run():
     ap.add_argument("--merge-pending", action="store_true",
                     help="对有未合并描述变更的章各调一次 LLM 合并并追加缓存")
     ap.add_argument("--backup", action="store_true", help="写前把 01_最新状态/ 整目录备份为 .bak")
+    ap.add_argument("--skip-audit-gate", action="store_true",
+                    help="跳过重折后 state 家族一致性门禁（重折常用于修脏账，门禁只告警不回滚）")
     args = ap.parse_args()
 
     novel_dir = os.path.abspath(args.novel_dir)
@@ -127,6 +129,21 @@ def _run():
         write_chapter_openers(novel_dir)
     except Exception as e:  # noqa: BLE001 —— 开篇状态刷新失败不应中断重折
         print(f"  警告: 逐章开篇状态刷新失败（{e}）；请手动跑 build_state_snapshot.py --write-chapter-openers")
+
+    # 重折后 state 家族门禁：与 merge_chapter_state 同口径，但**不回滚**
+    # （重折往往正是用来修脏账，回滚到旧树帮不了任何人）——只大声告警 + 非零退出。
+    if not args.skip_audit_gate:
+        print("\n跑重折后一致性门禁（state / relation / enum_domain 家族）...")
+        gate_errs = _run_state_audit_gate(novel_dir)
+        if gate_errs:
+            print(f"\n[警告] 重折后 state 家族审计仍有 {len(gate_errs)} 处 ERROR"
+                  f"（新树已写、未回滚）：")
+            for f in gate_errs:
+                print(f"  - {f.code} {f.message}")
+                for loc in (f.locations or [])[:20]:
+                    print(f"      {loc}")
+            print("\n多半是某章履历本身有问题——照报错改 01_状态履历.md 后再重折。")
+            sys.exit(2)
 
     print("\n重折完成。请立即运行 audit_consistency.py 复查一致性。")
 

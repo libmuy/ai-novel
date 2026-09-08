@@ -36,8 +36,11 @@ import argparse
 import os
 import shutil
 import sys
+from pathlib import Path
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "00_系统级"))
+_HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _HERE)  # 便于 import audit_consistency / audit.*
+sys.path.insert(0, os.path.join(_HERE, "..", "00_系统级"))
 
 import state_tree as st  # noqa: E402
 from state_lock import acquire_until_exit, StateLockError  # noqa: E402
@@ -87,6 +90,32 @@ def _make_llm_resolver(tools_dir):
     return resolver
 
 
+# 折叠后跑这几个规则族的一致性门禁——描述性字段错位 / 未注册字段 / 关系级联 / 枚举值域
+# 都是「折进最新状态就污染、事后 audit 才报」的那类，必须在这一步拦住、不能『另账处理』。
+_STATE_GATE_RULE_FILTERS = ("state", "relation", "enum_domain")
+
+
+def _run_state_audit_gate(novel_dir):
+    """折叠 + 写树之后跑 state 家族审计，返回 ERROR 级 Finding 列表（空＝通过）。
+
+    `rule_filter` 按前缀匹配：`"state"` 命中 state + state_registry；另加 relation / enum_domain。
+    """
+    from audit_consistency import get_default_engine
+    from audit.context import AuditContext
+
+    nd = Path(novel_dir)
+    engine = get_default_engine(nd)
+    ctx = AuditContext(nd)
+    seen, errs = set(), []
+    for filt in _STATE_GATE_RULE_FILTERS:
+        for f in engine.run(rule_filter=filt, context=ctx):
+            key = (f.code, tuple(f.locations or ()))
+            if f.severity == "error" and key not in seen:
+                seen.add(key)
+                errs.append(f)
+    return errs
+
+
 def main():
     """入口。真正的合并在 _run() 里，外面套状态树写锁（W6.2）。"""
     try:
@@ -108,7 +137,9 @@ def _run():
                     help="关闭写前备份")
     ap.add_argument("--no-llm", action="store_true",
                     help="本章若有待合并描述变更则直接中止（退出码 2），不调 LLM")
-    ap.add_argument("--force", action="store_true", help="允许并入非工作区最新章")
+    ap.add_argument("--force", action="store_true", help="允许并入非工作区最新章（并隐含跳过折叠后审计门禁）")
+    ap.add_argument("--skip-audit-gate", action="store_true",
+                    help="跳过折叠后 state 家族一致性门禁，仅在明知落到脏账上时用")
     for old in _REMOVED_ARGS:
         ap.add_argument(old, help=argparse.SUPPRESS)
 
@@ -226,6 +257,33 @@ def _run():
     for line in st.write_state_tree(live, records, folded_chapter=folded_chapter,
                                    tool="merge_chapter_state.py"):
         print(f"  {line}")
+
+    # 折叠后硬审计门禁：state 家族有 ERROR → 回滚最新状态树、不刷新开篇状态、
+    # 不打印「合并完成」、退出码 2。既有错误也拦（『另账处理』正是要终结的模式）。
+    if not (args.force or args.skip_audit_gate):
+        print("\n跑折叠后一致性门禁（state / relation / enum_domain 家族）...")
+        gate_errs = _run_state_audit_gate(novel_dir)
+        if gate_errs:
+            rolled_back = False
+            if do_backup and os.path.isdir(live.rstrip("/") + ".bak"):
+                bak = live.rstrip("/") + ".bak"
+                shutil.rmtree(live)
+                shutil.copytree(bak, live)
+                if os.path.exists(target_cl + ".bak"):
+                    shutil.copyfile(target_cl + ".bak", target_cl)
+                rolled_back = True
+            here = st.chapter_rel_name(target_cl, novel_dir)
+            print(f"\n[阻断] 折叠后 state 家族审计有 {len(gate_errs)} 处 ERROR"
+                  f"{'，已从 .bak 回滚最新状态树与本章履历' if rolled_back else '（无备份，最新状态树已写、未回滚）'}，"
+                  f"未刷新开篇状态：")
+            for f in gate_errs:
+                scope = "本章" if any(here in loc for loc in (f.locations or [])) else "既有"
+                print(f"  - [{scope}] {f.code} {f.message}")
+                for loc in (f.locations or [])[:20]:
+                    print(f"      {loc}")
+            print("\n本章视为**未折叠完成**。改 01_状态履历.md（或修上游/词表）后重跑；"
+                  "确知是在旧账上补票、要强行通过用 --skip-audit-gate。")
+            sys.exit(2)
 
     # 刷新逐章开篇状态派生视图（W4.1）
     try:

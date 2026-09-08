@@ -33,6 +33,7 @@ from audit.rules.foreshadow_schedule import ForeshadowScheduleRule
 from audit.rules.state_registry import StateRegistryRule
 from audit.rules.relation import RelationRule
 from audit.rules.plan_beat import PlanBeatRule
+from audit.rules.outline_pending import OutlinePendingRule
 from audit.rules.workspace import WorkspaceRule
 from audit.rules.progress import ProgressRule
 from audit.rules.enum_domain import EnumDomainRule
@@ -75,6 +76,7 @@ def get_default_engine(novel_dir: Path) -> AuditEngine:
     engine.register_rule(StateRegistryRule())
     engine.register_rule(RelationRule())
     engine.register_rule(PlanBeatRule())
+    engine.register_rule(OutlinePendingRule())
     engine.register_rule(WorkspaceRule())
     engine.register_rule(ProgressRule())
     engine.register_rule(EnumDomainRule())
