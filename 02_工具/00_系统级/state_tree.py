@@ -763,6 +763,10 @@ def _load_field_vocab(novel_dir):
 
 CHANGE_TYPES = {"新建", "修改", "移除"}
 SKELETON_PLACEHOLDER_MARKERS = ("〔待填", "待填/删", "〔待填；")
+# 骨架 `<!-- 上章值：X -->` 注释里若截断了长值，尾部带这个标记
+SKELETON_PREVVAL_TRUNC = "…（截断）"
+# 「本章该字段没变」被当成值填进去了——这类词永远不是合法字段值
+NO_CHANGE_VALUE_RE = re.compile(r"^\s*(无变化|没有变化|无变动|未变化|未变动|无改变|保持不变|同上|同前|照旧|不变)\s*[（(：:。.]?")
 
 
 def validate_changelog(changelog_path, novel_dir):
@@ -776,6 +780,8 @@ def validate_changelog(changelog_path, novel_dir):
       4. 「变更类型」列非法（非 新建/修改/移除）
       5. 「类型」列非法，或与词表登记类型冲突
       6. 骨架占位符残留（`build_state_snapshot.py --changelog-skeleton` 的 `〔待填…〕` 没替换）
+      7. 「值」列写成「无变化 / 同上」这类——本章该字段没变就删整行，别把它当值填
+      8. 「修改」行的值与骨架标注的上章值逐字相同（no-op：抄了 `<!-- 上章值：X -->` 注释）
     其余语法 / 值域交给 audit_consistency.py。字段词表加载逻辑与
     `02_工具/01_小说通用工具/audit/rules/state.py:_load_field_vocab` 等价，改一处两处都要同步。
     """
@@ -791,8 +797,15 @@ def validate_changelog(changelog_path, novel_dir):
             lines = f.readlines()
     except OSError as e:
         return [f"读不到履历文件：{e}"]
+    prev_val_hint = None   # 最近一条 `<!-- 上章值：X -->` 注释的内容（供检查 8）
+    prev_val_trunc = False
     for i, raw in enumerate(lines, 1):
         s = raw.strip()
+        m_hint = re.search(r"<!--\s*上章值[：:]\s*(.*?)\s*-->", s)
+        if m_hint:
+            h = m_hint.group(1)
+            prev_val_trunc = h.endswith(SKELETON_PREVVAL_TRUNC)
+            prev_val_hint = h[:-len(SKELETON_PREVVAL_TRUNC)] if prev_val_trunc else h
         if not s.startswith("|") or "---" in s or "对象ID" in s:
             continue
         cells = [c.strip() for c in s.split("|")[1:-1]]
@@ -838,6 +851,23 @@ def validate_changelog(changelog_path, novel_dir):
             errs.append(
                 f"第{i}行 值仍是骨架占位符（`〔待填…〕`）未替换。"
                 f"本章该字段无变化就删掉整行。")
+        # 检查 7：把「无变化 / 同上」当值填了
+        if NO_CHANGE_VALUE_RE.match(value):
+            errs.append(
+                f"第{i}行 值写成「{value[:16]}…」——本章该字段没变就**删掉整行**，"
+                f"不要把「无变化」之类当字段值填进去（会污染折叠后的卡片）。")
+        # 检查 8：「修改」行的值与骨架标注的上章值逐字相同（no-op）
+        chg = cells[6] if len(cells) >= 7 else ""
+        if prev_val_hint is not None and chg == "修改":
+            nv, ov = value.strip(), prev_val_hint.strip()
+            noop = (nv == ov) if not prev_val_trunc else (
+                len(nv) <= len(ov) + 4 and nv.startswith(ov))
+            if noop and nv not in NUMERIC_EMPTY_VALUES:
+                errs.append(
+                    f"第{i}行 「{field}」的值与上章一模一样（no-op「修改」）——"
+                    f"本章这个字段没变化就删掉整行，别照抄 `<!-- 上章值 -->` 注释。")
+        prev_val_hint = None
+        prev_val_trunc = False
     # 去重、保序
     seen, out = set(), []
     for e in errs:

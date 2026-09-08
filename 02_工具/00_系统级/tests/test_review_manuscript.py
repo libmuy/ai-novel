@@ -26,6 +26,33 @@ class TestExtractJsonObj(unittest.TestCase):
         self.assertEqual(R._extract_json_obj("no json here"), {})
 
 
+class TestPriorFindings(unittest.TestCase):
+    def test_extracts_and_dedupes(self):
+        with tempfile.TemporaryDirectory() as td:
+            rec = Path(td) / "02_正文校验记录.md"
+            rec.write_text(
+                "## 冷读评审 · 2026-01-01\n\n"
+                "**评审器发现（合并 3 条，未分诊）**\n\n"
+                "- 🔴 [矛盾] 「入微观照」与细纲禁修士术语冲突 〈opencode/mimo·带参照〉\n"
+                "- 🟡 [穿帮] 「铁皮矿车」现代冶金词汇（改：锈铁矿车）\n"
+                "- 🔴 [矛盾] 「入微观照」与细纲禁修士术语冲突 〈local_qwen·无参照〉\n",
+                encoding="utf-8")
+            got = R._prior_findings(rec)
+            self.assertEqual(len(got), 2)
+            self.assertTrue(any("入微观照" in g for g in got))
+            self.assertTrue(any("铁皮矿车" in g for g in got))
+            self.assertFalse(any("〈" in g for g in got))
+            self.assertFalse(any("改：" in g for g in got))
+
+    def test_missing_file_returns_empty(self):
+        self.assertEqual(R._prior_findings("/nonexistent/x.md"), [])
+
+    def test_prompt_includes_prior_block(self):
+        p = R._build_prompt("正文正文", "清单", None, prior=["某问题一", "某问题二"])
+        self.assertIn("上一轮冷读已提出的问题", p)
+        self.assertIn("某问题一", p)
+
+
 class TestOpencodeJsonlParse(unittest.TestCase):
     def test_collects_text_events(self):
         import json as _j

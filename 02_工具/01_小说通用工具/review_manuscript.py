@@ -273,15 +273,43 @@ def _run_lexicon(novel_dir: Path, target: Path, mode: str):
 
 # ---------------------------------------------------------------- 提示词与主流程
 
-def _build_prompt(target_text, checklist, ref_texts: dict | None):
+def _build_prompt(target_text, checklist, ref_texts: dict | None, prior: list | None = None):
     parts = [f"下面是一部长篇小说的{'细纲' if ref_texts is None else '章节'}文本，请按清单冷读挑错。\n"]
     if ref_texts:
         for name, txt in ref_texts.items():
             parts.append(f"===== 参照·{name} =====\n{txt.strip()}\n")
     parts.append("===== 待审文本 =====\n" + target_text.strip() + "\n")
+    if prior:
+        parts.append(
+            "===== 上一轮冷读已提出的问题 =====\n"
+            "以下问题在之前的冷读轮次里被提出过。请逐条确认现稿**是否已解决**；"
+            "若某条已修好则不必再报，若**仍存在或改后复发**请照常报出（标注「复发」）。\n"
+            + "\n".join(f"- {p}" for p in prior) + "\n")
     parts.append("===== 冷读清单 =====\n" + checklist + "\n")
     parts.append("===== 输出要求 =====\n" + _OUTPUT_SPEC)
     return "\n".join(parts)
+
+
+_FINDING_LINE_RE = re.compile(r"^\s*-\s*(?:🔴|🟡|⚪|·)\s*(.+?)(?:\s*〈[^〉]*〉)?\s*$")
+
+
+def _prior_findings(record_path, limit: int = 40) -> list:
+    """从既有「校验记录」里抽历轮冷读发现，供下一轮回归确认（fresh 重跑不丢已修问题）。"""
+    try:
+        text = Path(record_path).read_text(encoding="utf-8")
+    except (OSError, TypeError):
+        return []
+    out, seen = [], set()
+    for ln in text.splitlines():
+        m = _FINDING_LINE_RE.match(ln)
+        if not m:
+            continue
+        item = re.sub(r"（改：.*?）\s*$", "", m.group(1)).strip()
+        key = item[:60]
+        if len(item) > 8 and key not in seen:
+            seen.add(key)
+            out.append(item)
+    return out[-limit:]
 
 
 def _read(p) -> str:
@@ -323,11 +351,13 @@ def main():
     else:
         cl1, cl2 = CHECKLIST_PASS1, CHECKLIST_PASS2
 
+    prior = _prior_findings(record_path) if record_path else []
+
     jobs = []
     if passes in ("1", "both"):
-        jobs.append(("无参照", _build_prompt(target_text, cl1, None)))
+        jobs.append(("无参照", _build_prompt(target_text, cl1, None, prior)))
     if passes in ("2", "both"):
-        jobs.append(("带参照", _build_prompt(target_text, cl2, ref_texts)))
+        jobs.append(("带参照", _build_prompt(target_text, cl2, ref_texts, prior)))
 
     # ---- 评审器池 ----
     used, unavailable = [], []

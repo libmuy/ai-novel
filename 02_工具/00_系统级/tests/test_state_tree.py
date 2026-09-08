@@ -490,6 +490,49 @@ class TestValidateChangelog(unittest.TestCase):
             errs = st.validate_changelog(cl, novel)
             self.assertTrue(any("占位符" in e for e in errs), errs)
 
+    def test_flags_no_change_value(self):
+        with tempfile.TemporaryDirectory() as td:
+            novel = self._vocab_novel(td)
+            cl = self._write(td,
+                "| 角色.苏砚 | 身体状况 | 描述 | 无变化（背部鞭伤未愈） | 0004 | x | 修改 |\n")
+            errs = st.validate_changelog(cl, novel)
+            self.assertTrue(any("无变化" in e for e in errs), errs)
+
+    def test_bare_wu_still_allowed(self):
+        """裸「无」是合法字段值（外貌变化=无 等），不能误拦。"""
+        with tempfile.TemporaryDirectory() as td:
+            novel = self._vocab_novel(td)
+            cl = self._write(td,
+                "| 角色.苏砚 | 身体状况 | 描述 | 无 | 0004 | x | 修改 |\n")
+            self.assertEqual(st.validate_changelog(cl, novel), [])
+
+    def test_flags_noop_modify_matching_prev_value_comment(self):
+        with tempfile.TemporaryDirectory() as td:
+            novel = self._vocab_novel(td)
+            cl = self._write(td,
+                "<!-- 上章值：玄元道·炼气·初期 -->\n"
+                "| 角色.苏砚 | 境界 | 运算-枚举 | 玄元道·炼气·初期 | 0004 | x | 修改 |\n")
+            errs = st.validate_changelog(cl, novel)
+            self.assertTrue(any("no-op" in e or "一模一样" in e for e in errs), errs)
+
+    def test_noop_check_does_not_fire_on_real_change(self):
+        with tempfile.TemporaryDirectory() as td:
+            novel = self._vocab_novel(td)
+            cl = self._write(td,
+                "<!-- 上章值：凡人 -->\n"
+                "| 角色.苏砚 | 境界 | 运算-枚举 | 玄元道·炼气·初期 | 0004 | x | 修改 |\n")
+            self.assertEqual(st.validate_changelog(cl, novel), [])
+
+    def test_noop_check_comment_only_applies_to_next_row(self):
+        with tempfile.TemporaryDirectory() as td:
+            novel = self._vocab_novel(td)
+            cl = self._write(td,
+                "<!-- 上章值：凡人 -->\n"
+                "| 角色.苏砚 | 境界 | 运算-枚举 | 玄元道·炼气·初期 | 0004 | x | 修改 |\n"
+                "| 角色.苏砚 | 身体状况 | 描述 | 凡人 | 0004 | x | 修改 |\n")
+            # 第二行值恰好也是「凡人」，但上章值注释只作用于紧邻的第一行
+            self.assertEqual(st.validate_changelog(cl, novel), [])
+
 
 class TestHoldingsReverseIndex(unittest.TestCase):
     """W5：write_state_tree 生成 00_持有物品反查.md 派生视图（manifest=True 时）。"""

@@ -197,8 +197,9 @@ def _dynamic_fields_for(novel_dir, prefix, name):
                 continue
             rows = parse_dynamic_fields(open(c, encoding="utf-8", errors="ignore").read())
             if rows:
-                return [(f, t or "描述") for f, t, _v in rows], os.path.relpath(c, novel_dir)
-    return _FALLBACK_FIELDS.get(prefix, []), None
+                return ([(f, t or "描述", (v or "").strip()) for f, t, v in rows],
+                        os.path.relpath(c, novel_dir))
+    return [(f, t, "") for f, t in _FALLBACK_FIELDS.get(prefix, [])], None
 
 
 def _resolve_cast_id(novel_dir, ref):
@@ -309,7 +310,10 @@ def build_changelog_skeleton(chapter_dir, novel_dir=None, *, force=False, verbos
             have = set()
             for field, ftype, oldval in cur[oid]:
                 have.add(field)
-                lines.append(f"<!-- 上章值：{oldval[:80]} -->")
+                _ov = re.sub(r"\s+", " ", str(oldval)).strip()
+                if len(_ov) > 300:
+                    _ov = _ov[:300] + st.SKELETON_PREVVAL_TRUNC
+                lines.append(f"<!-- 上章值：{_ov} -->")
                 extra = ""
                 if oid == prot and field == "境界" and bp_hint:
                     extra = (f"  <!-- 突破卡：{bp_hint}；即时代价落「隐患·未解代价」，"
@@ -325,14 +329,17 @@ def build_changelog_skeleton(chapter_dir, novel_dir=None, *, force=False, verbos
             if prefix in ("角色", "势力"):
                 fields, src = _dynamic_fields_for(novel_dir, prefix, entry.ref.name)
                 if src:
-                    lines.append(f"<!-- 字段/初值参考：{src}【动态字段清单】 -->")
+                    lines.append(f"<!-- 字段/初值参考：{src}【动态字段清单】——"
+                                 f"「初值」是卡片基线值，**按本章剧情 + 人物卡正文填当前值**，别照抄、别填「无」 -->")
                 else:
                     lines.append(f"<!-- {prefix}卡无「## 动态字段清单」，下面是兜底字段集，按需增删 -->")
             else:
-                fields = _FALLBACK_FIELDS.get(prefix, [])
+                fields = [(f, t, "") for f, t in _FALLBACK_FIELDS.get(prefix, [])]
                 if prefix == "关系":
                     lines.append("<!-- 关系性质/亲疏/公开程度 是必填闭集；一端死亡/退场再补 对象终态=终结 -->")
-            for field, ftype in fields:
+            for field, ftype, initv in fields:
+                if initv and initv not in ("无", "-", "—"):
+                    lines.append(f"<!-- 卡片初值：{initv} -->")
                 lines.append(f"| {oid} | {field} | {ftype} | {_PLACEHOLDER} | {cnum} | {today} | 新建 |")
 
     # footer：一次性消耗品等「不进状态」的变化

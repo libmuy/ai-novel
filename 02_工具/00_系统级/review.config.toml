@@ -27,6 +27,6 @@ claude_subagent = false
 
 [run]
 # 单个 opencode 模型调用超时（秒）；免费档偶发服务器错，脚本会重试 1 次再回退下一个模型
-opencode_timeout = 240
+opencode_timeout = 300
 # 冷读遍数：1 = 仅无参照；2 = 仅带参照；both = 两遍
 passes = "both"
