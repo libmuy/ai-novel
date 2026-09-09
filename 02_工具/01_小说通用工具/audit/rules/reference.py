@@ -2,11 +2,16 @@
 全仓通用引用校验规则 (reference.py)
 检查 @实体引用、Markdown 链接、相对路径链接
 """
+import re
 from typing import List
 from ..models import Finding, Severity
 from ..engine import AuditRule
 from ..context import AuditContext
 from ..resolver.reference_resolver import ReferenceResolver
+
+# 名称类引用漏方括号——resolver 的 OBJECT_REF_PATTERN 不认 物品/关系，这里补一道纯文本扫描。
+# `@物品.[矿钉]` / `@关系.[甲&乙]` 方括号强制；`@角色.苏砚` / `@主角` / `@伏笔.FH-xxx` 用 ID、不在此列。
+_BARE_NAMED_REF = re.compile(r"@(物品|关系)\.(?!\[)([^\s\n\r\t，。！？；：、（）\[\]`|]+)")
 
 CATEGORY_DIR_MAP = {
     "地名": "02_地理区域",
@@ -71,7 +76,7 @@ class ReferenceRule(AuditRule):
                 if ref.entity_type in BRACKET_REQUIRED_TYPES and ".[" not in ref.raw_text \
                         and not ref.target.startswith("TODO-"):
                     findings.append(Finding(
-                        severity=Severity.WARNING,
+                        severity=Severity.ERROR,
                         rule=self.name,
                         code="REF003",
                         message=f"名称类引用 {ref.raw_text} 未加方括号；无分隔符时解析器会把后续正文吞进对象名",
@@ -114,6 +119,28 @@ class ReferenceRule(AuditRule):
                         target=ref.target,
                         suggestion="确认目标文件路径是否拼写正确，或创建该文件",
                         locations=[f"{ref.source_file}:第{ref.source_line}行"]
+                    ))
+
+        # ── REF003 补扫：resolver 不解析 @物品./@关系.，这里纯文本查方括号 ──
+        # 与 resolver 同口径——只扫权威数据子树，跳过 05_工作区/（生产过程归档）。
+        for fi in context.files:
+            if fi.file_type != "markdown" or fi.data_domain not in (
+                    "03_规划", "01_设定", "02_数据库", "10_正文"):
+                continue
+            for idx, line in enumerate(fi.content.splitlines(), 1):
+                for m in _BARE_NAMED_REF.finditer(line):
+                    findings.append(Finding(
+                        severity=Severity.ERROR,
+                        rule=self.name,
+                        code="REF003",
+                        message=f"名称类引用 @{m.group(1)}.{m.group(2)} 未加方括号（`@{m.group(1)}.[…]` 强制）",
+                        file=fi.relative_path,
+                        line=idx,
+                        source=m.group(0),
+                        target=f"{m.group(1)}.{m.group(2)}",
+                        suggestion=f"改写为 @{m.group(1)}.[{m.group(2)}]",
+                        category=m.group(1),
+                        locations=[f"{fi.relative_path}:第{idx}行"],
                     ))
 
         return findings

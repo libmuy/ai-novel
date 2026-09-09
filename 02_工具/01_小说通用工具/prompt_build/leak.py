@@ -102,9 +102,9 @@ def scan_source(section_title: str, body: str) -> list[Leak]:
         if s.startswith("#"):
             in_meta = any(h in s for h in SOURCE_META_HEADINGS)
             in_cast = "出场对象" in s          # 整张对象表都是台账
-            if i == 1:                        # 细纲自己的文档标题，不是叙述内容
-                continue
-        if in_meta or not s or s.startswith(("<!--", ">>>", "- [x]", "- [ ]")):
+            continue                          # 标题行是结构、从不转写进正文
+        # `>` 引用块是给本地 Agent 看的抬头/沿革/说明，从不转写进正文——跳过。
+        if in_meta or not s or s.startswith(("<!--", ">>>", ">", "- [x]", "- [ ]")):
             continue
         if in_cast or _is_meta_row(line):
             continue

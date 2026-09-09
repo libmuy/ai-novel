@@ -83,6 +83,22 @@ class TestAuditEngine(unittest.TestCase):
         self.assertIn("REF001", codes)
         self.assertIn("REF005", codes)
 
+    def test_ref003_bare_named_ref_is_error(self):
+        """@物品./@关系. 漏方括号 → REF003 error（resolver 不解析这两类，靠补扫）。"""
+        f = self.novel_dir / "03_规划" / "cast.md"
+        f.write_text("| `@物品.矿钉` | 持有者 |\n| `@关系.甲&乙` | 张力 |\n", encoding="utf-8")
+        findings = ReferenceRule().run(AuditContext(self.novel_dir))
+        ref003 = [x for x in findings if x.code == "REF003"]
+        self.assertEqual(len(ref003), 2)
+        self.assertTrue(all(str(x.severity) == str(Severity.ERROR) for x in ref003))
+
+    def test_ref003_bracketed_named_ref_ok(self):
+        """@物品.[矿钉] 带方括号 → 不报 REF003。"""
+        f = self.novel_dir / "03_规划" / "cast_ok.md"
+        f.write_text("| `@物品.[矿钉]` | 持有者 |\n| `@关系.[甲&乙]` | 张力 |\n", encoding="utf-8")
+        findings = ReferenceRule().run(AuditContext(self.novel_dir))
+        self.assertFalse([x for x in findings if x.code == "REF003"])
+
     def test_manuscript_purity(self):
         ms_dir = self.novel_dir / "10_正文"
         ms_dir.mkdir(exist_ok=True)

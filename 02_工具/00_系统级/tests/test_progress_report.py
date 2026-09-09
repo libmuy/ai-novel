@@ -40,6 +40,7 @@ def build_novel_fixture(temp_dir: Path, **opts) -> Path:
     - has_changelog (bool): 是否创建 01_状态履历.md，默认 False
     - has_opener (bool): 是否创建 00_开篇状态.md，默认 False
     - cold_read_record (str): 02_正文校验记录.md 内容，默认无（无冷读记录）
+    - outline_cold_read_record (str): 03_细纲对照记录.md 内容，默认建一份含 `## 冷读` 分节；传 None 则不建
     - revision_count (int): 创建多少个 01_正文生成_修订*.md 文件，默认 0
     - merged_upto (str): 00_同步状态.md 中的 折叠至章 值，默认 "—"
 
@@ -75,10 +76,15 @@ def build_novel_fixture(temp_dir: Path, **opts) -> Path:
     if opts.get("has_opener", False):
         _write(novel_dir / "05_工作区/03_第01部/03_卷01/03_章0001/02_状态/00_开篇状态.md", "# 开篇状态\n")
 
-    # 冷读记录
+    # 冷读记录（正文）
     cold_read_content = opts.get("cold_read_record")
     if cold_read_content is not None:
         _write(novel_dir / "05_工作区/03_第01部/03_卷01/03_章0001/02_状态/02_正文校验记录.md", cold_read_content)
+
+    # 冷读记录（细纲）——默认建一份，让「细纲定稿必须有冷读记录」的门禁在无关测试里不误触
+    outline_cr = opts.get("outline_cold_read_record", "# 细纲对照记录\n## 冷读评审 · 测试\n内容\n")
+    if outline_cr is not None:
+        _write(novel_dir / "05_工作区/03_第01部/03_卷01/03_章0001/02_状态/03_细纲对照记录.md", outline_cr)
 
     # 修订文件
     for i in range(1, opts.get("revision_count", 0) + 1):
@@ -498,6 +504,36 @@ class TestReconcile(unittest.TestCase):
         p003 = [lv for lv, code, _ in findings if code == "PROGRESS003"]
         self.assertTrue(p003)
         self.assertIn("error", p003)
+
+    def test_progress003_outline_finalized_without_cold_read_is_error(self):
+        """细纲标「定稿」却没 03_细纲对照记录.md → PROGRESS003 error。"""
+        novel_dir = build_novel_fixture(
+            self.tmp,
+            progress_table="| 文件 | 状态 |\n|---|---|\n"
+                           "| `03_规划/01_第01部/01_卷01/规划_卷01_章0001.md` | 定稿 |\n",
+            manuscript_exists=False, landing_check=None,
+            outline_cold_read_record=None,
+        )
+        declared = progress_report.declared_status(novel_dir)
+        rep = progress_report.collect(novel_dir)
+        findings = progress_report.reconcile(novel_dir, declared, rep)
+        hits = [(lv, msg) for lv, code, msg in findings
+                if code == "PROGRESS003" and "细纲" in msg]
+        self.assertTrue(hits)
+        self.assertEqual(hits[0][0], "error")
+
+    def test_progress003_outline_finalized_with_cold_read_ok(self):
+        """细纲标「定稿」且有冷读记录 → 无 PROGRESS003 细纲项。"""
+        novel_dir = build_novel_fixture(
+            self.tmp,
+            progress_table="| 文件 | 状态 |\n|---|---|\n"
+                           "| `03_规划/01_第01部/01_卷01/规划_卷01_章0001.md` | 定稿 |\n",
+            manuscript_exists=False, landing_check=None,
+        )
+        declared = progress_report.declared_status(novel_dir)
+        rep = progress_report.collect(novel_dir)
+        findings = progress_report.reconcile(novel_dir, declared, rep)
+        self.assertFalse([m for lv, c, m in findings if c == "PROGRESS003" and "细纲" in m])
 
     def test_progress003_no_cold_read_is_warning_when_pending(self):
         """正文标「待校验」没冷读记录 → PROGRESS003 但只是 warning。"""

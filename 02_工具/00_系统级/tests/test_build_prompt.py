@@ -1007,8 +1007,12 @@ class TestManifestGolden(TestAssemble):
     #      LLM 生成、作者发云端前自行复核，不再是「定稿后 Agent 填入」）——该模板整份内联进
     #      细纲提示词，措辞两次微调各改一次哈希。
     #   MANUSCRIPT 不变（正文不内联细纲模板，opener 走 layout step、缺失静默留空）。
-    GOLDEN_MANUSCRIPT = "ad4b2753fc4b562e5324d4b15386d8d879e30448227dcd9c21bdc693833e18ef"
-    GOLDEN_OUTLINE = "0b4b854152ab5b3feae6814b7f8171610eedc295e1531b35ae70eb381d7b2035"
+    # 2026-09-09（古籍政策 + 细纲缺陷根治）：`00_通用写作规则` §八【版权层】checklist 改口径
+    #   （现实古籍文句正文可用、只须不具名）→ 随 `_校验版` 切片内联进 MANUSCRIPT 与 OUTLINE 两者。
+    #   `07_单章细纲模板` 加「出场对象只放建卡对象/白名单」「内容简述禁结构指代」「新设定不计已有设定」
+    #   「轻埋伏笔不剧透」，只内联进 OUTLINE。
+    GOLDEN_MANUSCRIPT = "c915b798afafa87c81792de177ae90b7b7945cabf0c412bc9d445f29c64c29e7"
+    GOLDEN_OUTLINE = "083ea5d3cd48c54d2b3b6cefc4cb5b991196281ed7aebc2e4c593c7258633ef1"
 
     def _hash(self, text):
         import hashlib

@@ -61,7 +61,8 @@ class Chapter:
     manuscript: Path | None = None
     chapter_ws: Path | None = None
     words: int = 0
-    cold_rounds: int = 0        # 校验记录里 `## 冷读…` 分节数（标题命名不统一，非逻辑轮次）
+    cold_rounds: int = 0        # 正文校验记录里 `## 冷读…` 分节数（标题命名不统一，非逻辑轮次）
+    outline_cold_rounds: int = 0  # 细纲对照记录里 `## 冷读…` 分节数
     revision_rounds: int = 0
     has_changelog: bool = False
     has_opener: bool = False
@@ -190,6 +191,10 @@ def collect(novel_dir: Path) -> Report:
             if rec.exists():
                 c.cold_rounds = len(re.findall(
                     r"^##\s*冷读", rec.read_text(encoding="utf-8", errors="ignore"), re.M))
+            orec = st / "03_细纲对照记录.md"
+            if orec.exists():
+                c.outline_cold_rounds = len(re.findall(
+                    r"^##\s*冷读", orec.read_text(encoding="utf-8", errors="ignore"), re.M))
             if pr.is_dir():
                 c.revision_rounds = len(list(pr.glob("01_正文生成_修订*.md")))
 
@@ -272,6 +277,16 @@ def reconcile(novel_dir: Path, declared: dict[str, str], rep: Report) -> list[tu
     #   「定稿」＝「校验通过，可被引用」（见 `00_进度.md` 图例）——缺件即伪造下游前置，判 error。
     #   「待校验」＝结构齐但校验未做完，是正当中间态——只对「连正文都没落位」这类硬矛盾报 warning。
     for c in rep.chapters:
+        # 细纲：定稿前必须跑过冷读循环并留记录（细纲缺陷会原样复制进之后每一版正文）
+        if c.declared_outline == "定稿" and c.outline_cold_rounds == 0:
+            out.append(("error", "PROGRESS003",
+                        f"{c.cid} 细纲标「定稿」，但无冷读记录"
+                        f"（`02_状态/03_细纲对照记录.md` 缺失或无 `## 冷读` 分节）——"
+                        f"细纲门禁比正文严，`review_manuscript.py --mode outline` 冷读循环未跑就转定稿即伪造前置"))
+        elif c.declared_outline == "待校验" and c.outline_cold_rounds == 0:
+            out.append(("warning", "PROGRESS003",
+                        f"{c.cid} 细纲标「待校验」，还没有冷读记录——细纲冷读循环尚未开始"))
+
         if c.declared_manuscript == "定稿":
             if not c.has_changelog:
                 out.append(("error", "PROGRESS003",
@@ -324,8 +339,8 @@ def render_derived(rep: Report) -> str:
         "",
         "## 一、章节流水线",
         "",
-        "| 章 | 细纲 | 声明 | 正文(汉字) | 声明 | 冷读记录节 | 云端返修 | 落地核对 | 履历 | 开篇状态 | 已折叠 |",
-        "|---|---|---|---|---|---|---|---|---|---|---|",
+        "| 章 | 细纲 | 声明 | 细纲冷读节 | 正文(汉字) | 声明 | 冷读记录节 | 云端返修 | 落地核对 | 履历 | 开篇状态 | 已折叠 |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for c in rep.chapters:
         if not c.has_landing_check:
@@ -334,9 +349,10 @@ def render_derived(rep: Report) -> str:
             lc = "○"          # 已生成、仍有未锚定项
         else:
             lc = "✔"
-        L.append("| {cid} | {o} | {od} | {w} | {md} | {cr} | {rr} | {lc} | {cl} | {op} | {mg} |".format(
+        L.append("| {cid} | {o} | {od} | {ocr} | {w} | {md} | {cr} | {rr} | {lc} | {cl} | {op} | {mg} |".format(
             cid=c.cid,
             o="✔" if c.outline else "—", od=c.declared_outline or "—",
+            ocr=c.outline_cold_rounds or "—",
             w=c.words or "—", md=c.declared_manuscript or "—",
             cr=c.cold_rounds or "—", rr=c.revision_rounds or "—",
             lc=lc,
@@ -344,7 +360,7 @@ def render_derived(rep: Report) -> str:
             op="✔" if c.has_opener else "—",
             mg="✔" if c.merged else "—"))
     if not rep.chapters:
-        L.append("| （尚无章节） | — | — | — | — | — | — | — | — | — | — |")
+        L.append("| （尚无章节） | — | — | — | — | — | — | — | — | — | — | — |")
 
     L += ["", f"状态树折叠至 **{rep.merged_upto}**，共 {rep.state_objects} 个对象。", "",
           "## 二、设定层", "", "| 文件 | 体量 | 进度表声明 |", "|---|---|---|"]
@@ -371,7 +387,7 @@ def render_text(rep: Report) -> str:
     L = [f"=== {rep.novel_name} · 进度对账 ===",
          f"章节 {len(rep.chapters)} 个，状态树折叠至 {rep.merged_upto}", ""]
     for c in rep.chapters:
-        L.append(f"  {c.cid}  细纲={c.declared_outline or '未登记'}"
+        L.append(f"  {c.cid}  细纲={c.declared_outline or '未登记'}（冷读 {c.outline_cold_rounds} 节）"
                  f"  正文={c.declared_manuscript or '未登记'}"
                  f" {c.words or 0} 字  冷读记录 {c.cold_rounds} 节"
                  f"  返修 {c.revision_rounds} 轮"
@@ -410,6 +426,7 @@ def main() -> int:
             "merged_upto": rep.merged_upto,
             "chapters": [{
                 "章": c.cid, "细纲声明": c.declared_outline, "正文声明": c.declared_manuscript,
+                "细纲冷读记录节": c.outline_cold_rounds,
                 "汉字": c.words, "冷读记录节": c.cold_rounds, "返修轮": c.revision_rounds,
                 "落地核对": c.has_landing_check and not c.landing_check_open,
                 "落地核对未清": c.has_landing_check and c.landing_check_open,
