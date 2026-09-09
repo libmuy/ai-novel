@@ -13,7 +13,8 @@
     /work            工作区：章节列表
     /work/<部>/<卷>/<章>          该章——选「读」或「听」
     /work/<部>/<卷>/<章>/read     读：该章 05_工作区/…/章XXXX/ 文件浏览器
-                                  （?f=<相对路径> 看单个文件）
+                                  （?f=<相对路径> 看单个文件，.md 渲染成 HTML；
+                                   &raw=1 出纯文本；页面有「复制原文」按钮）
     /work/<部>/<卷>/<章>/listen   听：同一份音频
 
     /feed.xml        标准播客 RSS——手机播客 App（Pocket Casts / Apple Podcasts…）订阅
@@ -260,9 +261,29 @@ ul.tree{list-style:none;padding:0;margin:0}
 ul.tree li{border:1px solid var(--line);border-radius:8px;padding:8px 12px;margin-bottom:6px;background:var(--card)}
 ul.tree a{text-decoration:none}ul.tree .sz{color:var(--mut);font-size:12px;float:right}
 .empty{color:var(--mut);padding:36px 0;text-align:center}
+.copybar{margin:14px 0}
+.md{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:20px 24px;font-size:15px;line-height:1.7;overflow-wrap:anywhere}
+.md>:first-child{margin-top:0}.md>:last-child{margin-bottom:0}
+.md h1{font-size:20px;margin:0 0 12px}
+.md h2{font-size:16px;color:var(--fg);border:0;padding:0;margin:24px 0 8px}
+.md h3{font-size:14px;margin:18px 0 6px}
+.md h4,.md h5,.md h6{font-size:13px;color:var(--mut);margin:14px 0 4px}
+.md p{margin:0 0 .8em}
+.md ul,.md ol{margin:.4em 0 .9em;padding-left:1.5em}.md li{margin:.25em 0}
+.md code{background:rgba(128,128,128,.16);padding:1px 5px;border-radius:4px;font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}
+.md pre.code{background:rgba(128,128,128,.12);border-radius:8px;padding:12px 14px;overflow:auto}
+.md pre.code code{background:none;padding:0}
+.md blockquote{margin:.6em 0;padding:.2em 0 .2em 1em;border-left:3px solid var(--line);color:var(--mut)}
+.md table{border-collapse:collapse;margin:.9em 0;font-size:13px;display:block;overflow-x:auto}
+.md th,.md td{border:1px solid var(--line);padding:5px 9px;text-align:left;vertical-align:top}
+.md th{background:rgba(128,128,128,.1);white-space:nowrap}
+.md hr{border:0;border-top:1px solid var(--line);margin:1.3em 0}
 """
 
-JS = "function cp(u){navigator.clipboard.writeText(u).then(function(){var b=document.getElementById('cp');b.textContent='已复制';setTimeout(function(){b.textContent='复制';},1500);});}"
+JS = ("function cp(u){navigator.clipboard.writeText(u).then(function(){var b=document.getElementById('cp');"
+      "b.textContent='已复制';setTimeout(function(){b.textContent='复制';},1500);});}"
+      "function cpfile(b){var t=document.getElementById('src');navigator.clipboard.writeText(t.value).then("
+      "function(){var o=b.textContent;b.textContent='已复制';setTimeout(function(){b.textContent=o;},1500);});}")
 
 
 def _doc(title: str, body: str) -> bytes:
@@ -354,6 +375,143 @@ def page_chapter(e: Entry, title, branch) -> bytes:
     return _doc(f"{title} · {e.title}", body)
 
 
+_MD_CODE = re.compile(r"`([^`]+)`")
+_MD_BOLD = re.compile(r"\*\*(?!\s)([^*\n]+?)\*\*")
+_MD_ITAL = re.compile(r"(?<![\*\w])\*(?!\s)([^*\n]+?)\*(?!\*)")
+_MD_LINK = re.compile(r"\[([^\]]+)\]\((https?://[^\s)]+)\)")
+_MD_HEAD = re.compile(r"(#{1,6})\s+(.*)")
+_MD_HR = re.compile(r"(?:\*\s*){3,}|(?:-\s*){3,}|(?:_\s*){3,}")
+_MD_LI = re.compile(r"\s*([-*+]|\d+[.)])\s+(.*)")
+_MD_TSEP = re.compile(r"\s*\|?[\s:|-]*-[\s:|-]*\|?\s*")
+
+
+def _md_inline(s: str) -> str:
+    """行内标记 → HTML。s 必须已 html.escape。"""
+    s = _MD_CODE.sub(lambda m: f"<code>{m.group(1)}</code>", s)
+    s = _MD_BOLD.sub(lambda m: f"<strong>{m.group(1)}</strong>", s)
+    s = _MD_ITAL.sub(lambda m: f"<em>{m.group(1)}</em>", s)
+    s = _MD_LINK.sub(lambda m: f"<a href=\"{m.group(2)}\" rel=noopener target=_blank>{m.group(1)}</a>", s)
+    return s
+
+
+def _md_row(line: str) -> list[str]:
+    s = line.strip()
+    if s.startswith("|"):
+        s = s[1:]
+    if s.endswith("|"):
+        s = s[:-1]
+    return [c.strip() for c in s.split("|")]
+
+
+def _md_li_html(item: str) -> str:
+    box = {"[ ]": "☐ ", "[x]": "☑ ", "[X]": "☑ "}
+    for k, v in box.items():
+        if item.startswith(k + " "):
+            return v + _md_inline(html.escape(item[len(k) + 1:]))
+    return _md_inline(html.escape(item))
+
+
+def render_markdown(text: str) -> str:
+    """Markdown 子集 → HTML（标题/列表/表格/引用/围栏代码/分隔线/行内标记）。
+
+    纯字符串处理，无第三方依赖；未覆盖的写法按普通段落原样（转义后）显示。
+    """
+    lines = text.lstrip("﻿").split("\n")
+    out: list[str] = []
+    para: list[str] = []
+    n = len(lines)
+    i = 0
+
+    def flush():
+        if para:
+            out.append("<p>" + "<br>".join(_md_inline(html.escape(x)) for x in para) + "</p>")
+            para.clear()
+
+    while i < n:
+        raw = lines[i]
+        s = raw.strip()
+
+        if s.startswith("```") or s.startswith("~~~"):
+            flush()
+            fence = s[:3]
+            i += 1
+            code = []
+            while i < n and not lines[i].strip().startswith(fence):
+                code.append(lines[i])
+                i += 1
+            i += 1
+            out.append("<pre class=code><code>" + html.escape("\n".join(code)) + "</code></pre>")
+            continue
+
+        if not s:
+            flush()
+            i += 1
+            continue
+
+        m = _MD_HEAD.match(s)
+        if m:
+            flush()
+            lvl = len(m.group(1))
+            out.append(f"<h{lvl}>{_md_inline(html.escape(m.group(2).rstrip('#').strip()))}</h{lvl}>")
+            i += 1
+            continue
+
+        if _MD_HR.fullmatch(s):
+            flush()
+            out.append("<hr>")
+            i += 1
+            continue
+
+        if "|" in raw and i + 1 < n and "-" in lines[i + 1] and _MD_TSEP.fullmatch(lines[i + 1]):
+            flush()
+            header = _md_row(raw)
+            i += 2
+            rows = []
+            while i < n and lines[i].strip() and "|" in lines[i] and not lines[i].lstrip().startswith("#"):
+                rows.append(_md_row(lines[i]))
+                i += 1
+            th = "".join(f"<th>{_md_inline(html.escape(c))}</th>" for c in header)
+            tb = "".join("<tr>" + "".join(f"<td>{_md_inline(html.escape(c))}</td>" for c in r)
+                         + "</tr>" for r in rows)
+            out.append(f"<table><thead><tr>{th}</tr></thead><tbody>{tb}</tbody></table>")
+            continue
+
+        if s.startswith(">"):
+            flush()
+            quote = []
+            while i < n and lines[i].strip().startswith(">"):
+                quote.append(lines[i].strip()[1:].lstrip())
+                i += 1
+            out.append("<blockquote>"
+                       + "<br>".join(_md_inline(html.escape(x)) for x in quote) + "</blockquote>")
+            continue
+
+        m = _MD_LI.fullmatch(raw)
+        if m:
+            flush()
+            tag = "ol" if m.group(1)[0].isdigit() else "ul"
+            items = []
+            while i < n and lines[i].strip():
+                mm = _MD_LI.fullmatch(lines[i])
+                if not mm:
+                    break
+                items.append(mm.group(2))
+                i += 1
+            out.append(f"<{tag}>" + "".join(f"<li>{_md_li_html(x)}</li>" for x in items) + f"</{tag}>")
+            continue
+
+        para.append(s)
+        i += 1
+
+    flush()
+    return "".join(out)
+
+
+def _copybar(raw_text: str, label: str = "复制原文") -> str:
+    return (f"<div class=copybar><button onclick='cpfile(this)'>{label}</button>"
+            f"<textarea id=src hidden>{html.escape(raw_text)}</textarea></div>")
+
+
 def render_prose(text: str) -> str:
     text = text.lstrip("﻿")
     html_parts = []
@@ -379,6 +537,7 @@ def page_manuscript(e: Entry, title, raw: bool):
             + f"<h1>{html.escape(e.title)}</h1>"
             f"<div class=crumb><a href='/text/{e.path3()}/read?raw=1'>纯文本</a>"
             f" · <a href='/text/{e.path3()}/listen'>听</a></div>"
+            f"{_copybar(data)}"
             f"<div class=prose>{render_prose(data)}</div>")
     return ("text/html; charset=utf-8", _doc(f"{title} · {e.title}", body))
 
@@ -407,7 +566,7 @@ def page_listen(e: Entry, title, branch) -> bytes:
     return _doc(f"{title} · {e.title} · 听", body)
 
 
-def page_work_read(e: Entry, title, rel: str | None):
+def page_work_read(e: Entry, title, rel: str | None, raw: bool = False):
     if not e.ws_dir or not e.ws_dir.is_dir():
         return None
     root = e.ws_dir.resolve()
@@ -426,11 +585,17 @@ def page_work_read(e: Entry, title, rel: str | None):
         if suffix not in _TEXT_EXT:
             body = crumb + f"<h1>{html.escape(rel)}</h1><p class=meta>（{_fmt_size(_safe_size(target))}，不支持预览）</p>"
             return ("text/html; charset=utf-8", _doc(title, body))
-        raw = target.read_bytes()[:_RENDER_CAP]
+        text = target.read_bytes()[:_RENDER_CAP].decode("utf-8", "replace")
+        if raw:
+            return ("text/plain; charset=utf-8", text.encode("utf-8"))
         note = "<p class=meta>（文件较大，只显示前 512 KiB）</p>" if _safe_size(target) > _RENDER_CAP else ""
+        rq = urllib.parse.quote(rel)
+        rendered = (f"<div class=md>{render_markdown(text)}</div>" if suffix == ".md"
+                    else f"<pre class=file>{html.escape(text)}</pre>")
         body = (crumb + f"<h1>{html.escape(rel)}</h1>"
-                f"<div class=crumb><a href='{base3}/read'>← 文件列表</a></div>{note}"
-                f"<pre class=file>{html.escape(raw.decode('utf-8', 'replace'))}</pre>")
+                f"<div class=crumb><a href='{base3}/read'>← 文件列表</a>"
+                f" · <a href='{base3}/read?f={rq}&raw=1'>纯文本</a></div>{note}"
+                f"{_copybar(text)}{rendered}")
         return ("text/html; charset=utf-8", _doc(f"{title} · {rel}", body))
 
     files = sorted(p for p in e.ws_dir.rglob("*") if p.is_file())
@@ -566,7 +731,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(b"not found\n", "text/plain; charset=utf-8", 404)
             return self._send(r[1], r[0])
         if verb == "read" and branch == "work":
-            r = page_work_read(e, self.title, qs.get("f", [None])[0])
+            r = page_work_read(e, self.title, qs.get("f", [None])[0],
+                               raw=qs.get("raw", ["0"])[0] == "1")
             if r is None:
                 return self._send(b"not found\n", "text/plain; charset=utf-8", 404)
             return self._send(r[1], r[0], r[2] if len(r) > 2 else 200)

@@ -75,6 +75,43 @@ class TestRenderProse(unittest.TestCase):
         self.assertIn("<hr>", h)
 
 
+class TestRenderMarkdown(unittest.TestCase):
+    def test_headings_para_inline(self):
+        h = S.render_markdown("# 标题\n\n一段 **粗** 和 `code` 文字。")
+        self.assertIn("<h1>标题</h1>", h)
+        self.assertIn("<strong>粗</strong>", h)
+        self.assertIn("<code>code</code>", h)
+
+    def test_gfm_table(self):
+        h = S.render_markdown("| 字段 | 值 |\n|---|---|\n| 境界 | 凡人 |\n| 内力 | 0 |")
+        self.assertIn("<table>", h)
+        self.assertIn("<th>字段</th>", h)
+        self.assertEqual(h.count("<tr>"), 3)   # 1 表头 + 2 行
+        self.assertIn("<td>凡人</td>", h)
+
+    def test_lists_and_checkboxes(self):
+        h = S.render_markdown("- a\n- b\n\n1. 一\n2. 二\n\n- [ ] 待办\n- [x] 完成")
+        self.assertIn("<ul><li>a</li><li>b</li></ul>", h)
+        self.assertIn("<ol><li>一</li><li>二</li></ol>", h)
+        self.assertIn("☐ 待办", h)
+        self.assertIn("☑ 完成", h)
+
+    def test_fence_and_quote_and_hr(self):
+        h = S.render_markdown("> 引用\n\n```\nx | y\n```\n\n---\n\n末尾")
+        self.assertIn("<blockquote>引用</blockquote>", h)
+        self.assertIn("<pre class=code><code>x | y</code></pre>", h)
+        self.assertIn("<hr>", h)
+
+    def test_escapes_html(self):
+        h = S.render_markdown("<script>alert(1)</script> 与 a<b")
+        self.assertNotIn("<script>", h)
+        self.assertIn("&lt;script&gt;", h)
+
+    def test_underscores_in_filenames_not_italic(self):
+        h = S.render_markdown("见 `00_提示词/01_正文生成.md` 与 05_工作区 目录")
+        self.assertNotIn("<em>", h)
+
+
 class TestPages(unittest.TestCase):
     def test_home_and_lists(self):
         with tempfile.TemporaryDirectory() as td:
@@ -146,8 +183,18 @@ class TestHttp(unittest.TestCase):
         with self._get("/work/1/1/1/read") as r:
             body = r.read().decode()
             self.assertIn("00_提示词/01_正文生成.md", body)
-        with self._get("/work/1/1/1/read?f=00_%E6%8F%90%E7%A4%BA%E8%AF%8D/01_%E6%AD%A3%E6%96%87%E7%94%9F%E6%88%90.md") as r:
-            self.assertIn("pre class=file", r.read().decode())
+        # .md → 渲染成 HTML（class=md），带「复制原文」按钮，不再是 <pre>
+        f = "00_%E6%8F%90%E7%A4%BA%E8%AF%8D/01_%E6%AD%A3%E6%96%87%E7%94%9F%E6%88%90.md"
+        with self._get(f"/work/1/1/1/read?f={f}") as r:
+            body = r.read().decode()
+            self.assertIn("class=md", body)
+            self.assertIn("<h1>提示词</h1>", body)
+            self.assertIn("cpfile(this)", body)
+            self.assertNotIn("pre class=file", body)
+        # &raw=1 → 纯文本原文
+        with self._get(f"/work/1/1/1/read?f={f}&raw=1") as r:
+            self.assertEqual(r.headers["Content-Type"], "text/plain; charset=utf-8")
+            self.assertEqual(r.read().decode(), "# 提示词\n内容")
 
     def test_traversal_blocked(self):
         try:
