@@ -5,7 +5,7 @@
 
 某本小说的本地 HTTP 索引，层次：
 
-    /                首页——选「正文」或「工作区」
+    /                首页——选「正文」「工作区」「规划」
     /text            正文：章节列表
     /text/<部>/<卷>/<章>          该章——选「读」或「听」
     /text/<部>/<卷>/<章>/read     读：渲染 10_正文/…/章{C}.md（?raw=1 出纯文本）
@@ -16,6 +16,10 @@
                                   （?f=<相对路径> 看单个文件，.md 渲染成 HTML；
                                    &raw=1 出纯文本；页面有「复制原文」按钮）
     /work/<部>/<卷>/<章>/listen   听：同一份音频
+    /plan            规划：顶层文档 + 卷规划列表
+    /plan/root?f=<文件名>         读：渲染 03_规划/顶层文件
+    /plan/<部>/<卷>               卷规划文件浏览器
+    /plan/<部>/<卷>/read?f=<路径> 读：渲染卷内文件
 
     /feed.xml        标准播客 RSS——手机播客 App（Pocket Casts / Apple Podcasts…）订阅
     /audio/<部>/<卷>/<章>[/<场>].mp3   音频（支持 Range 断点续传）
@@ -182,6 +186,67 @@ def find(entries: list[Entry], part, vol, ch) -> Entry | None:
     return None
 
 
+# ================================================================ 规划
+
+class PlanVol:
+    """一卷的规划文件聚合。"""
+
+    def __init__(self, part: int, vol: int, novel_dir: Path):
+        self.part, self.vol = part, vol
+        self.novel_dir = novel_dir
+        self.files: list[Path] = []
+
+    @property
+    def key(self):
+        return (self.part, self.vol)
+
+    @property
+    def label(self):
+        return f"第 {self.part} 部 · 卷 {self.vol:02d}"
+
+    def path2(self):
+        return f"{self.part}/{self.vol}"
+
+
+class PlanRoot:
+    """规划根目录下的顶层文件（03_规划/*.md）。"""
+
+    def __init__(self, novel_dir: Path):
+        self.novel_dir = novel_dir
+        self.files: list[Path] = []
+
+
+def scan_planning(novel_dir: Path) -> tuple[PlanRoot, list[PlanVol]]:
+    plan_dir = novel_dir / "03_规划"
+    if not plan_dir.is_dir():
+        return PlanRoot(novel_dir), []
+
+    root = PlanRoot(novel_dir)
+    for f in sorted(plan_dir.iterdir()):
+        if f.is_file() and f.suffix == ".md":
+            root.files.append(f)
+
+    vols: dict[tuple, PlanVol] = {}
+
+    def get_vol(part, vol):
+        k = (part, vol)
+        if k not in vols:
+            vols[k] = PlanVol(part, vol, novel_dir)
+        return vols[k]
+
+    for md in plan_dir.rglob("*.md"):
+        rel = md.relative_to(plan_dir)
+        parts = rel.parts
+        if len(parts) < 2:
+            continue
+        mp = re.search(r"第0*(\d+)部", parts[0])
+        mv = re.search(r"卷0*(\d+)", parts[1])
+        if mp and mv:
+            get_vol(int(mp.group(1)), int(mv.group(1))).files.append(md)
+
+    return root, [vols[k] for k in sorted(vols)]
+
+
 # ================================================================ mp3 时长
 
 def _mp3_duration_seconds(path: Path, size: int) -> int:
@@ -302,16 +367,18 @@ def _crumb(*parts) -> str:
     return f"<div class=crumb>{' / '.join(bits)}</div>"
 
 
-def page_home(entries, title, base) -> bytes:
+def page_home(entries, title, base, plan_root=None, plan_vols=None) -> bytes:
     feed = f"{base}/feed.xml"
     n_text = sum(1 for e in entries if e.manuscript)
     n_work = sum(1 for e in entries if e.ws_dir)
     n_audio = sum(1 for e in entries if e.has_audio)
+    n_plan = len((plan_vols or [])) + len((plan_root.files if plan_root else []))
     body = (
         f"<h1>{html.escape(title)}</h1>"
         "<div class=choices>"
         f"<a class=choice href='/text'><b>正文</b><span>{n_text} 章 · 读定稿正文 / 听配音</span></a>"
         f"<a class=choice href='/work'><b>工作区</b><span>{n_work} 章 · 提示词 / 模型输出 / 状态 / 校验记录</span></a>"
+        f"<a class=choice href='/plan'><b>规划</b><span>{n_plan} 项 · 伏笔总纲 / 卷规划 / 章细纲</span></a>"
         "</div>"
         f"<div class=feedbox>📻 播客订阅（{n_audio} 章有配音）——手机播客 App 里粘："
         f"<code>{html.escape(feed)}</code> <button id=cp onclick=\"cp('{html.escape(feed)}')\">复制</button></div>"
@@ -615,6 +682,102 @@ def page_work_read(e: Entry, title, rel: str | None, raw: bool = False):
     return ("text/html; charset=utf-8", _doc(f"{title} · {e.title} · 工作区", body))
 
 
+# ================================================================ 规划页面
+
+def page_plan_root(root: PlanRoot, vols: list[PlanVol], title: str) -> bytes:
+    body = _crumb(("/", "首页"), "规划") + "<h1>规划</h1>"
+
+    if root.files:
+        rows = []
+        for f in root.files:
+            q = urllib.parse.quote(f.name)
+            rows.append(f"<li><a href='/plan/root?f={q}'>{html.escape(f.name)}</a>"
+                        f"<span class=sz>{_fmt_size(_safe_size(f))}</span></li>")
+        body += f"<h2>顶层文档</h2><ul class=tree>{''.join(rows)}</ul>"
+
+    if vols:
+        rows = []
+        for v in vols:
+            href = f"/plan/{v.path2()}"
+            n = len(v.files)
+            rows.append(f"<div class=row><div><span class=nm>{html.escape(v.label)}</span>"
+                        f" <span class=meta>{n} 个文件</span></div>"
+                        f"<div class=acts><a href='{href}'>浏览</a></div></div>")
+        body += "<h2>卷规划</h2>" + "".join(rows)
+
+    if not root.files and not vols:
+        body += "<div class=empty>（03_规划/ 目录为空）</div>"
+
+    return _doc(f"{title} · 规划", body)
+
+
+def page_plan_vol(vol: PlanVol, title: str) -> bytes:
+    base2 = f"/plan/{vol.path2()}"
+    crumb = _crumb(("/", "首页"), ("/plan", "规划"), vol.label)
+    if not vol.files:
+        lst = "<div class=empty>（空目录）</div>"
+    else:
+        rows = []
+        for f in vol.files:
+            r = f.relative_to(vol.novel_dir / "03_规划").as_posix()
+            q = urllib.parse.quote(r)
+            rows.append(f"<li><a href='{base2}/read?f={q}'>{html.escape(f.name)}</a>"
+                        f"<span class=sz>{_fmt_size(_safe_size(f))}</span></li>")
+        lst = f"<ul class=tree>{''.join(rows)}</ul>"
+    body = crumb + f"<h1>{html.escape(vol.label)} · 规划</h1>{lst}"
+    return _doc(f"{title} · {vol.label} · 规划", body)
+
+
+def page_plan_file(plan_dir: Path, rel: str, title: str, raw: bool = False):
+    target = (plan_dir / rel).resolve()
+    if not target.is_file() or plan_dir.resolve() not in target.parents:
+        return ("text/plain; charset=utf-8", b"not found\n", 404)
+    suffix = target.suffix.lower()
+    if suffix not in _TEXT_EXT:
+        body = (f"<h1>{html.escape(rel)}</h1>"
+                f"<p class=meta>（{_fmt_size(_safe_size(target))}，不支持预览）</p>")
+        return ("text/html; charset=utf-8", _doc(title, body))
+    text = target.read_bytes()[:_RENDER_CAP].decode("utf-8", "replace")
+    if raw:
+        return ("text/plain; charset=utf-8", text.encode("utf-8"))
+    note = "<p class=meta>（文件较大，只显示前 512 KiB）</p>" if _safe_size(target) > _RENDER_CAP else ""
+    rq = urllib.parse.quote(rel)
+    rendered = (f"<div class=md>{render_markdown(text)}</div>" if suffix == ".md"
+                else f"<pre class=file>{html.escape(text)}</pre>")
+    crumb = _crumb(("/", "首页"), ("/plan", "规划"), rel)
+    body = (crumb + f"<h1>{html.escape(rel)}</h1>"
+            f"<div class=crumb><a href='/plan'>← 规划列表</a>"
+            f" · <a href='/plan/root?f={rq}&raw=1'>纯文本</a></div>{note}"
+            f"{_copybar(text)}{rendered}")
+    return ("text/html; charset=utf-8", _doc(f"{title} · {rel}", body))
+
+
+def page_plan_file_in_vol(vol: PlanVol, rel: str, title: str, raw: bool = False):
+    plan_dir = vol.novel_dir / "03_规划"
+    target = (plan_dir / rel).resolve()
+    if not target.is_file() or plan_dir.resolve() not in target.parents:
+        return ("text/plain; charset=utf-8", b"not found\n", 404)
+    suffix = target.suffix.lower()
+    base2 = f"/plan/{vol.path2()}"
+    crumb = _crumb(("/", "首页"), ("/plan", "规划"), (base2, vol.label), rel)
+    if suffix not in _TEXT_EXT:
+        body = crumb + (f"<h1>{html.escape(rel)}</h1>"
+                        f"<p class=meta>（{_fmt_size(_safe_size(target))}，不支持预览）</p>")
+        return ("text/html; charset=utf-8", _doc(title, body))
+    text = target.read_bytes()[:_RENDER_CAP].decode("utf-8", "replace")
+    if raw:
+        return ("text/plain; charset=utf-8", text.encode("utf-8"))
+    note = "<p class=meta>（文件较大，只显示前 512 KiB）</p>" if _safe_size(target) > _RENDER_CAP else ""
+    rq = urllib.parse.quote(rel)
+    rendered = (f"<div class=md>{render_markdown(text)}</div>" if suffix == ".md"
+                else f"<pre class=file>{html.escape(text)}</pre>")
+    body = (crumb + f"<h1>{html.escape(rel)}</h1>"
+            f"<div class=crumb><a href='{base2}'>← 文件列表</a>"
+            f" · <a href='{base2}/read?f={rq}&raw=1'>纯文本</a></div>{note}"
+            f"{_copybar(text)}{rendered}")
+    return ("text/html; charset=utf-8", _doc(f"{title} · {rel}", body))
+
+
 def render_feed(entries, title, base) -> bytes:
     items = []
     for e in entries:
@@ -656,6 +819,8 @@ class Handler(BaseHTTPRequestHandler):
     novel_dir: Path = None
     title: str = ""
     base_override: str | None = None
+    plan_root: PlanRoot = None
+    plan_vols: list[PlanVol] = []
 
     def log_message(self, fmt, *a):
         sys.stderr.write("%s - %s\n" % (self.address_string(), fmt % a))
@@ -685,7 +850,9 @@ class Handler(BaseHTTPRequestHandler):
             base = self._base(u)
 
             if not seg:
-                return self._send(page_home(entries, self.title, base), "text/html; charset=utf-8")
+                return self._send(page_home(entries, self.title, base,
+                                            self.plan_root, self.plan_vols),
+                                  "text/html; charset=utf-8")
             if seg == ["feed.xml"]:
                 return self._send(render_feed(entries, self.title, base),
                                   "application/rss+xml; charset=utf-8")
@@ -693,6 +860,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._serve_audio(seg[1:], entries)
             if seg[0] in ("text", "work"):
                 return self._route_branch(seg, qs, entries)
+            if seg[0] == "plan":
+                return self._route_plan(seg, qs)
             self._send(b"not found\n", "text/plain; charset=utf-8", 404)
         except BrokenPipeError:
             pass
@@ -736,6 +905,51 @@ class Handler(BaseHTTPRequestHandler):
             if r is None:
                 return self._send(b"not found\n", "text/plain; charset=utf-8", 404)
             return self._send(r[1], r[0], r[2] if len(r) > 2 else 200)
+        self._send(b"not found\n", "text/plain; charset=utf-8", 404)
+
+    def _route_plan(self, seg, qs):
+        rest = seg[1:]
+        raw = qs.get("raw", ["0"])[0] == "1"
+        plan_dir = self.novel_dir / "03_规划"
+
+        if not rest:
+            return self._send(page_plan_root(self.plan_root, self.plan_vols, self.title),
+                              "text/html; charset=utf-8")
+
+        if rest[0] == "root":
+            f = qs.get("f", [None])[0]
+            if not f:
+                return self._send(b"not found\n", "text/plain; charset=utf-8", 404)
+            r = page_plan_file(plan_dir, f, self.title, raw=raw)
+            if isinstance(r, tuple) and len(r) == 3:
+                return self._send(r[1], r[0], r[2])
+            return self._send(r[1], r[0])
+
+        if len(rest) < 2:
+            return self._send(b"not found\n", "text/plain; charset=utf-8", 404)
+        try:
+            part, vol = int(rest[0]), int(rest[1])
+        except ValueError:
+            return self._send(b"not found\n", "text/plain; charset=utf-8", 404)
+        v = None
+        for pv in self.plan_vols:
+            if pv.key == (part, vol):
+                v = pv
+                break
+        if not v:
+            return self._send(b"not found\n", "text/plain; charset=utf-8", 404)
+
+        verb = rest[2] if len(rest) >= 3 else None
+        if verb is None:
+            return self._send(page_plan_vol(v, self.title), "text/html; charset=utf-8")
+        if verb == "read":
+            f = qs.get("f", [None])[0]
+            if not f:
+                return self._send(b"not found\n", "text/plain; charset=utf-8", 404)
+            r = page_plan_file_in_vol(v, f, self.title, raw=raw)
+            if isinstance(r, tuple) and len(r) == 3:
+                return self._send(r[1], r[0], r[2])
+            return self._send(r[1], r[0])
         self._send(b"not found\n", "text/plain; charset=utf-8", 404)
 
     def _serve_audio(self, rest, entries):
@@ -790,9 +1004,11 @@ class Handler(BaseHTTPRequestHandler):
                 remaining -= len(chunk)
 
 
-def make_handler(novel_dir: Path, title: str, base_override: str | None):
+def make_handler(novel_dir: Path, title: str, base_override: str | None,
+                 plan_root: PlanRoot = None, plan_vols: list[PlanVol] | None = None):
     return type("BoundHandler", (Handler,),
-                {"novel_dir": novel_dir, "title": title, "base_override": base_override})
+                {"novel_dir": novel_dir, "title": title, "base_override": base_override,
+                 "plan_root": plan_root, "plan_vols": plan_vols or []})
 
 
 # ================================================================ main
@@ -809,7 +1025,7 @@ def _lan_ip() -> str:
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="章节浏览 / 音频本地服务（正文·工作区·读·听 + 播客 RSS）")
+    ap = argparse.ArgumentParser(description="章节浏览 / 音频本地服务（正文·工作区·规划·读·听 + 播客 RSS）")
     ap.add_argument("novel_dir")
     ap.add_argument("--host", default="0.0.0.0")
     ap.add_argument("--port", type=int, default=8765)
@@ -823,11 +1039,15 @@ def main(argv=None):
     title = args.title or novel_dir.name.split("_", 1)[-1]
 
     entries = scan(novel_dir)
-    httpd = ThreadingHTTPServer((args.host, args.port), make_handler(novel_dir, title, args.base_url))
+    plan_root, plan_vols = scan_planning(novel_dir)
+    httpd = ThreadingHTTPServer((args.host, args.port),
+                                make_handler(novel_dir, title, args.base_url,
+                                             plan_root, plan_vols))
     disp = _lan_ip() if args.host in ("0.0.0.0", "::") else args.host
     feed = args.base_url.rstrip("/") + "/feed.xml" if args.base_url else f"http://{disp}:{args.port}/feed.xml"
     n_audio = sum(1 for e in entries if e.has_audio)
-    print(f"章节服务 · {title} · {len(entries)} 章（{n_audio} 有配音）", flush=True)
+    n_plan = len(plan_vols) + len(plan_root.files)
+    print(f"章节服务 · {title} · {len(entries)} 章（{n_audio} 有配音）· {n_plan} 规划项", flush=True)
     print(f"  首页   : http://{disp}:{args.port}/", flush=True)
     print(f"  播客RSS: {feed}", flush=True)
     print("  Ctrl-C 停", flush=True)

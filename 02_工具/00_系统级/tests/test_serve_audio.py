@@ -39,6 +39,17 @@ def _make_tree(tmp: Path, with_audio=True, with_ch2=True):
     if with_ch2:
         ws2 = novel / "05_工作区" / "03_第01部" / "03_卷01" / "04_章0002"
         (ws2 / "00_提示词").mkdir(parents=True)
+    # 规划目录
+    plan = novel / "03_规划"
+    plan.mkdir(parents=True)
+    (plan / "00_伏笔总纲.md").write_text("# 伏笔总纲\n伏笔内容", encoding="utf-8")
+    (plan / "规划.md").write_text("# 规划\n总体规划", encoding="utf-8")
+    v1 = plan / "01_第01部" / "01_卷01"
+    v1.mkdir(parents=True)
+    (v1 / "规划_卷01.md").write_text("# 卷一规划\n卷规划内容", encoding="utf-8")
+    (v1 / "规划_卷01_章0001.md").write_text("## 第一章细纲\n细纲内容", encoding="utf-8")
+    (v1 / "01_事件").mkdir()
+    (v1 / "01_事件" / "BT-V1-001_战斗结算.md").write_text("战斗结算", encoding="utf-8")
     return novel
 
 
@@ -66,6 +77,28 @@ class TestScan(unittest.TestCase):
             self.assertEqual(e1.audio_units(), [(None, e1.audio_dir / "章0001.mp3")])
             self.assertEqual(entries[1].manuscript, None)   # ch2 只有工作区
             self.assertFalse(entries[1].has_audio)
+
+
+class TestScanPlanning(unittest.TestCase):
+    def test_finds_root_and_vols(self):
+        with tempfile.TemporaryDirectory() as td:
+            root, vols = S.scan_planning(_make_tree(Path(td)))
+            self.assertEqual(len(root.files), 2)
+            names = [f.name for f in root.files]
+            self.assertIn("00_伏笔总纲.md", names)
+            self.assertIn("规划.md", names)
+            self.assertEqual(len(vols), 1)
+            self.assertEqual(vols[0].key, (1, 1))
+            self.assertEqual(len(vols[0].files), 3)  # 卷规划 + 章细纲 + 事件文件
+
+    def test_empty_when_no_plan_dir(self):
+        with tempfile.TemporaryDirectory() as td:
+            novel = Path(td) / "novel"
+            (novel / "10_正文").mkdir(parents=True)
+            (novel / "05_工作区").mkdir(parents=True)
+            root, vols = S.scan_planning(novel)
+            self.assertEqual(len(root.files), 0)
+            self.assertEqual(len(vols), 0)
 
 
 class TestRenderProse(unittest.TestCase):
@@ -116,9 +149,11 @@ class TestPages(unittest.TestCase):
     def test_home_and_lists(self):
         with tempfile.TemporaryDirectory() as td:
             entries = S.scan(_make_tree(Path(td)))
-            home = S.page_home(entries, "苍玄", "http://p:8765").decode()
+            plan_root, plan_vols = S.scan_planning(Path(td) / "00_苍玄")
+            home = S.page_home(entries, "苍玄", "http://p:8765", plan_root, plan_vols).decode()
             self.assertIn("href='/text'", home)
             self.assertIn("href='/work'", home)
+            self.assertIn("href='/plan'", home)
             self.assertIn("http://p:8765/feed.xml", home)
 
             tl = S.page_list(entries, "苍玄", "text").decode()
@@ -153,7 +188,10 @@ class TestHttp(unittest.TestCase):
     def setUp(self):
         self.td = tempfile.TemporaryDirectory()
         novel = _make_tree(Path(self.td.name))
-        self.httpd = S.ThreadingHTTPServer(("127.0.0.1", 0), S.make_handler(novel, "苍玄", None))
+        plan_root, plan_vols = S.scan_planning(novel)
+        self.httpd = S.ThreadingHTTPServer(
+            ("127.0.0.1", 0),
+            S.make_handler(novel, "苍玄", None, plan_root, plan_vols))
         self.port = self.httpd.server_address[1]
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
 
@@ -167,7 +205,9 @@ class TestHttp(unittest.TestCase):
         return urllib.request.urlopen(req, timeout=5)
 
     def test_routes(self):
-        for p in ("/", "/text", "/work", "/text/1/1/1", "/work/1/1/1", "/text/1/1/1/listen"):
+        for p in ("/", "/text", "/work", "/plan",
+                  "/text/1/1/1", "/work/1/1/1", "/text/1/1/1/listen",
+                  "/plan/1/1"):
             with self._get(p) as r:
                 self.assertEqual(r.status, 200, p)
                 self.assertIn("text/html", r.headers["Content-Type"], p)
@@ -199,6 +239,34 @@ class TestHttp(unittest.TestCase):
     def test_traversal_blocked(self):
         try:
             self._get("/work/1/1/1/read?f=../../../../../../etc/passwd")
+            self.fail("expected 404")
+        except urllib.error.HTTPError as e:
+            self.assertEqual(e.code, 404)
+
+    def test_plan_file_browser(self):
+        with self._get("/plan") as r:
+            body = r.read().decode()
+            self.assertIn("伏笔总纲.md", body)
+            self.assertIn("规划.md", body)
+            self.assertIn("第 1 部 · 卷 01", body)
+        with self._get("/plan/1/1") as r:
+            body = r.read().decode()
+            self.assertIn("规划_卷01.md", body)
+            self.assertIn("规划_卷01_章0001.md", body)
+        # .md → rendered as HTML with class=md
+        f = "01_%E7%AC%AC01%E9%83%A8/01_%E5%8D%B701/%E8%A7%84%E5%88%92_%E5%8D%B701.md"
+        with self._get(f"/plan/root?f={f}") as r:
+            body = r.read().decode()
+            self.assertIn("class=md", body)
+            self.assertIn("<h1>卷一规划</h1>", body)
+            self.assertIn("cpfile(this)", body)
+        # raw mode
+        with self._get(f"/plan/root?f={f}&raw=1") as r:
+            self.assertEqual(r.headers["Content-Type"], "text/plain; charset=utf-8")
+            self.assertIn("卷规划内容", r.read().decode())
+        # traversal blocked
+        try:
+            self._get("/plan/root?f=../../../../../../etc/passwd")
             self.fail("expected 404")
         except urllib.error.HTTPError as e:
             self.assertEqual(e.code, 404)
