@@ -36,6 +36,7 @@
 
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -48,6 +49,9 @@ from dataclasses import dataclass, field
 
 CONFIG_FILENAME = "llm.config.toml"
 SECRET_FILENAME = "llm.secret.toml"
+
+# 推理模型（Qwen3 等）可能前置 <think>…</think>；散文任务与 JSON 剥离都要去掉它
+_THINK_RE = re.compile(r"<think>.*?</think>", re.S)
 
 # opencode 后端默认试用的免费模型（按顺序试，前一个失败/空输出/超时则试下一个）
 _OPENCODE_MODELS = ["opencode/mimo-v2.5-free", "opencode/nemotron-3-ultra-free"]
@@ -183,17 +187,27 @@ def _opencode_chat(system: str, user: str, models=None, timeout: int = 300) -> s
     raise LlmError(f"opencode 全部失败: {last_err}")
 
 
-def chat(cfg, system, user):
-    """按 backend（http/opencode/auto）分派，返回 assistant 文本内容。失败抛 LlmError。"""
+def chat(cfg, system, user, *, json_mode=True):
+    """按 backend（http/opencode/auto）分派，返回 assistant 文本内容。失败抛 LlmError。
+
+    json_mode=True （默认，供 merge_descriptive_fields 用）：http 后端带
+    `response_format={"type":"json_object"}`，逼模型只吐 JSON。
+    json_mode=False（散文任务，如上章摘要）：不带该约束，并剥掉推理模型的
+    `<think>…</think>` 前缀。
+    """
     backend = _resolve_backend(cfg)
     if backend == "opencode":
-        return _opencode_chat(system, user, models=cfg.opencode_models, timeout=cfg.opencode_timeout)
-    if backend != "http":
+        out = _opencode_chat(system, user, models=cfg.opencode_models, timeout=cfg.opencode_timeout)
+    elif backend == "http":
+        out = _http_chat(cfg, system, user, json_mode=json_mode)
+    else:
         raise LlmError(f"未知 backend: {backend!r}（合法值: http / opencode / auto）")
-    return _http_chat(cfg, system, user)
+    if not json_mode:
+        out = _THINK_RE.sub("", out).strip()
+    return out
 
 
-def _http_chat(cfg, system, user):
+def _http_chat(cfg, system, user, *, json_mode=True):
     """调用 OpenAI 兼容 /chat/completions，返回 assistant 文本内容。失败抛 LlmError。"""
     if cfg.api_key_required and not cfg.api_key:
         raise LlmError(
@@ -202,7 +216,7 @@ def _http_chat(cfg, system, user):
             f"（本地无鉴权端点可在 {CONFIG_FILENAME} 设 api_key_required = false）"
         )
 
-    body = json.dumps({
+    payload_body = {
         "model": cfg.model,
         "messages": [
             {"role": "system", "content": system},
@@ -210,8 +224,10 @@ def _http_chat(cfg, system, user):
         ],
         "temperature": cfg.temperature,
         "max_tokens": cfg.max_tokens,
-        "response_format": {"type": "json_object"},
-    }).encode("utf-8")
+    }
+    if json_mode:
+        payload_body["response_format"] = {"type": "json_object"}
+    body = json.dumps(payload_body).encode("utf-8")
 
     headers = {"Content-Type": "application/json"}
     if cfg.api_key:
@@ -253,11 +269,6 @@ _SYSTEM_PROMPT = (
     "(3) 只写该字段本身的描述，不加解释、标注或前后缀；"
     "(4) 保持简洁，一般不超过较长一方的 1.5 倍。"
 )
-
-
-import re as _re
-
-_THINK_RE = _re.compile(r"<think>.*?</think>", _re.S)
 
 
 def _strip_json_fence(text):
@@ -311,3 +322,35 @@ def merge_descriptive_fields(cfg, items):
             raise LlmError(f"LLM 返回缺少字段 {k}（{obj_id}.{field}）或值为空: {content[:500]}")
         result[(obj_id, field)] = parsed[k].strip()
     return result
+
+
+_SUMMARY_SYSTEM = "你是长篇小说编辑，擅长把一整章正文压成承上启下的衔接摘要。"
+
+
+def summarize_chapter(cfg, manuscript_text, *, target_chars=300):
+    """把整章正文压成 <= target_chars 字的上下文衔接摘要（散文，非 JSON）。
+
+    覆盖本章关键剧情推进、人物处境与局势变化，供下一章开篇承接。
+    过长则加一句更严的指令重试一次；仍过长按原样返回（由调用方在报告里提示）。
+    LLM 不可用 / 返回空 → 抛 LlmError（调用方据此阻断，不写半成品）。
+    """
+    text = (manuscript_text or "").strip()
+    if not text:
+        raise LlmError("待摘要的正文为空")
+
+    def _ask(extra):
+        user = (
+            f"下面是小说的一整章正文。请压缩成不超过 {target_chars} 字的中文摘要，"
+            "覆盖本章关键剧情推进、人物处境与局势变化，供下一章开篇无缝承接。"
+            "只输出摘要正文，不要标题、编号、解释或前后缀。" + extra + "\n\n" + text
+        )
+        return chat(cfg, _SUMMARY_SYSTEM, user, json_mode=False).strip()
+
+    out = _ask("")
+    if not out:
+        raise LlmError("LLM 返回空摘要")
+    if len(out) > target_chars * 1.15:
+        retry = _ask(f"（上一版超了，务必压到 {target_chars} 字以内）")
+        if retry:
+            out = retry
+    return out

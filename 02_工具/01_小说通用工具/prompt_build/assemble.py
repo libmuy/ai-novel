@@ -13,6 +13,7 @@
    要么是从结构化字段（节拍表行、出场对象表、场景表）机械导出的。
    需要作者判断的地方一律留 `>>> 待人工确认` 标记，绝不代笔。
 """
+import datetime
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -461,7 +462,9 @@ def _rv_opener_state_outline(ctx, step, todos, cache):
     if not body:
         body = _todo(
             todos, "本章开篇状态未物化",
-            "跑 `build_state_snapshot.py --write-chapter-openers`（首章用冻结基线）")
+            "正常由 `build_prompt.py` 准备阶段调 "
+            "`build_state_snapshot.py --chapter-opener` 物化；见到此占位说明当次是 "
+            "--dry-run，或物化被阻断（前序章未跑 merge_chapter_state.py）")
     elif not body.lstrip().startswith("# 本章开篇状态"):
         # `--write-chapter-openers` 写的抬头恒为「# 本章开篇状态 · <章路径>」并带完整溯源注。
         # 抬头不对 → 多半是有人用 `--at-chapter` 手跑或手改了（ch0004 首版抬头是
@@ -963,6 +966,38 @@ def _outline_selfcheck() -> str:
 """
 
 
+# 上章摘要存 `00_提示词/上章摘要.md`（无数字前缀：辅助输入，不参与 WS006 产出配对）。
+# 生成 = LLM 压缩，由 build_prompt.py 的准备阶段负责（见该脚本 _prepare）；本模块只读。
+SUMMARY_FILENAME = "上章摘要.md"
+_SUMMARY_LLM_MARKER = "<!-- 上章摘要 · LLM 生成待人工复核"
+
+
+def read_prev_summary(digest: Path):
+    """读 上章摘要.md。返回：
+
+    - None                      文件缺失 / 空 / 仍是 `>>>` 占位
+    - (正文, unreviewed: bool)   unreviewed=True 表示首行是 LLM 出处标记、尚未人工复核
+    """
+    try:
+        raw = digest.read_text(encoding="utf-8") if digest.exists() else ""
+    except OSError:
+        raw = ""
+    if not raw.strip() or raw.lstrip().startswith(">>>"):
+        return None
+    lines = raw.splitlines()
+    if lines and lines[0].strip().startswith(_SUMMARY_LLM_MARKER):
+        return "\n".join(lines[1:]).strip(), True
+    return raw.strip(), False
+
+
+def write_prev_summary(digest: Path, text: str) -> None:
+    """写 LLM 生成的上章摘要，首行带出处标记（人工复核并接受后删掉首行即转为人工版）。"""
+    digest.parent.mkdir(parents=True, exist_ok=True)
+    marker = (f"{_SUMMARY_LLM_MARKER} · {datetime.date.today().isoformat()} · "
+              "复核衔接、接受后删除此行 -->")
+    digest.write_text(marker + "\n" + text.strip() + "\n", encoding="utf-8")
+
+
 def _sliding_window(ctx: Ctx, todos: list[str]) -> str:
     L = ctx.layout
     if L.chapter <= 1:
@@ -971,31 +1006,23 @@ def _sliding_window(ctx: Ctx, todos: list[str]) -> str:
     if prev is None or not prev.exists():
         return _todo(todos, "上一章正文尚未落位，滑动窗口留空",
                      "先把上一章正文落位到 `10_正文/…`，再重拼本提示词")
-    tail = extract.tail_text(prev.read_text(encoding="utf-8", errors="ignore"))
+    prev_text = prev.read_text(encoding="utf-8", errors="ignore")
+    tail = extract.tail_text(prev_text)
     head = ("### 上章结尾原文（最后 500 字，正文须紧密承接其场景与语气）\n\n"
             "```\n" + tail + "\n```\n\n### 上章末尾摘要\n\n")
-    # 摘要是理解性压缩、工具不代笔——但也不该每次 --force 重拼就被冲掉。
-    # 存 `00_提示词/上章摘要.md`（无数字前缀：辅助输入，不参与 WS006 产出配对）：
-    # 写过一次就复用，没写过就落一份占位并报 todo。
-    digest = L.prompt_dir / "上章摘要.md"
-    try:
-        saved = digest.read_text(encoding="utf-8").strip() if digest.exists() else ""
-    except OSError:
-        saved = ""
-    if saved and not saved.startswith(">>>"):
-        return head + saved + "\n"
-    if not digest.exists():
-        try:
-            digest.parent.mkdir(parents=True, exist_ok=True)
-            digest.write_text(
-                ">>> 上章 300 字摘要需人工撰写：理解性压缩上一章末尾剧情与局势，"
-                "写好后替换本文件全部内容，重拼提示词即自动带入。\n", encoding="utf-8")
-        except OSError:
-            pass
-    return head + _todo(
-        todos, "上章 300 字摘要需人工撰写",
-        f"写进 `{rel(ctx.novel_dir, digest)}`（替换占位内容），重拼即自动带入；"
-        "工具不代笔")
+    digest = L.prompt_dir / SUMMARY_FILENAME
+    got = read_prev_summary(digest)
+    if got is None:
+        return head + _todo(
+            todos, "上章摘要缺失",
+            f"正常由 `build_prompt.py` 准备阶段调 LLM 生成写入 `{rel(ctx.novel_dir, digest)}`；"
+            "见到此占位说明当次是 --dry-run，或摘要生成被阻断（LLM 不可用）")
+    body, unreviewed = got
+    if unreviewed:
+        todos.append(
+            f"上章摘要为 LLM 生成、未经人工复核——冷读时须校对与上一章的衔接，"
+            f"确认后删掉 `{rel(ctx.novel_dir, digest)}` 首行的出处标记")
+    return head + body + "\n"
 
 
 def resolve_prev_manuscript(ctx: Ctx) -> Optional[Path]:

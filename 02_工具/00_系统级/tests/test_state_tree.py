@@ -691,8 +691,9 @@ class TestChatDispatch(unittest.TestCase):
         orig = _llm._http_chat
         called = {}
 
-        def fake(cfg_, system, user):
+        def fake(cfg_, system, user, *, json_mode=True):
             called["hit"] = True
+            called["json_mode"] = json_mode
             return "resp"
 
         _llm._http_chat = fake

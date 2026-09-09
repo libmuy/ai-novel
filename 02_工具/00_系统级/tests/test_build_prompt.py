@@ -783,6 +783,168 @@ class TestBuildPromptCLI(unittest.TestCase):
         self.assertFalse(archive.exists())
 
 
+class TestPrevSummaryFile(unittest.TestCase):
+    """assemble.read_prev_summary / write_prev_summary —— 上章摘要文件的三态识别。"""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_missing_and_placeholder_return_none(self):
+        f = self.tmp / "上章摘要.md"
+        self.assertIsNone(assemble.read_prev_summary(f))
+        _write(f, "")
+        self.assertIsNone(assemble.read_prev_summary(f))
+        _write(f, ">>> 待人工确认：上章摘要缺失\n>>> 提示\n")
+        self.assertIsNone(assemble.read_prev_summary(f))
+
+    def test_human_version_is_reviewed(self):
+        f = self.tmp / "上章摘要.md"
+        _write(f, "苏砚吞灵草突破，经脉受损。\n")
+        body, unreviewed = assemble.read_prev_summary(f)
+        self.assertEqual(body, "苏砚吞灵草突破，经脉受损。")
+        self.assertFalse(unreviewed)
+
+    def test_llm_version_roundtrips_with_marker(self):
+        f = self.tmp / "上章摘要.md"
+        assemble.write_prev_summary(f, "  苏砚吞灵草突破，经脉受损。  ")
+        raw = f.read_text(encoding="utf-8")
+        self.assertTrue(raw.splitlines()[0].startswith("<!-- 上章摘要 · LLM 生成待人工复核"))
+        body, unreviewed = assemble.read_prev_summary(f)
+        self.assertEqual(body, "苏砚吞灵草突破，经脉受损。")
+        self.assertTrue(unreviewed)
+        # 删掉首行标记 → 转为「人工版」
+        _write(f, body + "\n")
+        _b, unreviewed2 = assemble.read_prev_summary(f)
+        self.assertFalse(unreviewed2)
+
+
+class TestChapterOpenerCLI(unittest.TestCase):
+    """build_state_snapshot.py --chapter-opener —— 单章开篇状态物化。"""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.repo_root = Path(__file__).resolve().parents[3]
+        self.bss = self.repo_root / "02_工具/01_小说通用工具/build_state_snapshot.py"
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _novel(self):
+        nd = self.tmp / "00_小说"
+        (nd / "05_工作区/02_状态/00_基线状态").mkdir(parents=True)
+        _write(nd / "05_工作区/02_状态/00_基线状态/00_说明.md", "# 基线\n> 只读。\n")
+        _write(nd / "05_工作区/02_状态/00_基线状态/01_角色/01_角色_苏砚.md",
+               "| 对象ID | 字段 | 类型 | 值 |\n| --- | --- | --- | --- |\n"
+               "| 角色.苏砚 | 境界 | 运算-枚举 | 凡人 |\n")
+        _write(nd / "05_工作区/02_状态/00_基线状态/01_角色/01_角色_柳禾.md",
+               "| 对象ID | 字段 | 类型 | 值 |\n| --- | --- | --- | --- |\n"
+               "| 角色.柳禾 | 身体状况 | 描述 | 肺痨晚期 |\n")
+        _write(nd / "01_设定/00_主角档案.md",
+               "# 主角\n| 字段 | 必填 | 内容 |\n|---|---|---|\n| 姓名 | (必) | 苏砚 |\n")
+        return nd
+
+    def test_single_chapter_opener_canonical_header_and_cast_trim(self):
+        nd = self._novel()
+        # 章0002 细纲只点名苏砚
+        _write(nd / "03_规划/01_第01部/01_卷01/规划_卷01_章0002.md",
+               "# 细纲\n## 出场对象\n| 对象ID | 出场方式 |\n|---|---|\n| `@主角` | 登场 |\n")
+        chap_state = nd / "05_工作区/03_第01部/03_卷01/04_章0002/02_状态"
+        r = subprocess.run(
+            [sys.executable, str(self.bss), "--chapter-opener", str(chap_state),
+             "--novel-dir", str(nd)],
+            capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        body = (chap_state / "00_开篇状态.md").read_text(encoding="utf-8")
+        self.assertTrue(body.startswith("# 本章开篇状态 · 03_第01部/03_卷01/04_章0002"))
+        self.assertIn("角色.苏砚", body)
+        self.assertNotIn("角色.柳禾", body)      # 被出场对象清单裁掉
+
+    def test_missing_baseline_exits_1(self):
+        nd = self.tmp / "空小说"
+        (nd / "05_工作区/03_第01部/03_卷01/03_章0001/02_状态").mkdir(parents=True)
+        r = subprocess.run(
+            [sys.executable, str(self.bss), "--chapter-opener",
+             str(nd / "05_工作区/03_第01部/03_卷01/03_章0001/02_状态"),
+             "--novel-dir", str(nd)],
+            capture_output=True, text=True)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("基线", r.stdout + r.stderr)
+
+
+class TestPreparePhaseCLI(unittest.TestCase):
+    """build_prompt.py PREPARE 阶段：--dry-run 零副作用；正式跑物化开篇状态。"""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.repo_root = Path(__file__).resolve().parents[3]
+        self.build_prompt_py = self.repo_root / "02_工具/01_小说通用工具/build_prompt.py"
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _novel(self):
+        nd = self.tmp / "00_小说"
+        nd.mkdir()
+        _write(nd / "00_进度.md",
+               "| 文件 | 状态 |\n|---|---|\n"
+               "| `03_规划/01_第01部/01_卷01/规划_卷01.md` | 定稿 |\n")
+        _write(nd / "01_设定/00_红线包.md", "# 红线包\n约束。\n")
+        _write(nd / "01_设定/00_主角档案.md",
+               "# 主角\n| 字段 | 必填 | 内容 |\n|---|---|---|\n| 姓名 | (必) | 苏砚 |\n")
+        _write(nd / "03_规划/01_第01部/01_卷01/规划_卷01.md",
+               "# 卷01大纲\n## 【章节节拍表】\n"
+               "| 章节 | 一句话剧情摘要 | 必用模板 | 核心事件类型 | 钩子类型 |\n"
+               "|---|---|---|---|---|\n| 第01章 | 主角醒来 | — | — | — |\n")
+        (nd / "05_工作区/02_状态/00_基线状态").mkdir(parents=True)
+        _write(nd / "05_工作区/02_状态/00_基线状态/00_说明.md", "# 基线\n> 只读。\n")
+        _write(nd / "05_工作区/02_状态/00_基线状态/01_角色/01_角色_苏砚.md",
+               "| 对象ID | 字段 | 类型 | 值 |\n| --- | --- | --- | --- |\n"
+               "| 角色.苏砚 | 境界 | 运算-枚举 | 凡人 |\n")
+        return nd
+
+    def _run(self, nd, *extra):
+        return subprocess.run(
+            [sys.executable, str(self.build_prompt_py), "--novel", str(nd),
+             "--task", "细纲", "--chapter", "1", *extra],
+            capture_output=True, text=True)
+
+    def test_dry_run_writes_nothing(self):
+        nd = self._novel()
+        r = self._run(nd, "--dry-run")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("--dry-run", r.stdout)
+        opener = nd / "05_工作区/03_第01部/03_卷01/03_章0001/02_状态/00_开篇状态.md"
+        archive = nd / "05_工作区/03_第01部/03_卷01/03_章0001/00_提示词/00_单章细纲.md"
+        self.assertFalse(opener.exists(), "--dry-run 不该物化开篇状态")
+        self.assertFalse(archive.exists(), "--dry-run 不该写提示词存档")
+
+    def test_real_run_materializes_opener(self):
+        nd = self._novel()
+        r = self._run(nd)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        opener = nd / "05_工作区/03_第01部/03_卷01/03_章0001/02_状态/00_开篇状态.md"
+        self.assertTrue(opener.exists())
+        self.assertTrue(opener.read_text(encoding="utf-8").startswith("# 本章开篇状态"))
+        self.assertIn("开篇状态", r.stdout)
+
+    def test_gate_blocks_when_prev_changelog_missing(self):
+        """章2 细纲：上一章正文落位但履历还没写 → GATE 阻断（开篇状态会漏上章变化）。"""
+        nd = self._novel()
+        _write(nd / "00_进度.md",
+               "| 文件 | 状态 |\n|---|---|\n"
+               "| `03_规划/01_第01部/01_卷01/规划_卷01.md` | 定稿 |\n")
+        _write(nd / "10_正文/01_第01部/01_卷01/章0001.md", "苏砚醒来。\n" * 50)
+        r = subprocess.run(
+            [sys.executable, str(self.build_prompt_py), "--novel", str(nd),
+             "--task", "细纲", "--chapter", "2"],
+            capture_output=True, text=True)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("上一章状态履历未写", r.stdout)
+
+
 class TestManifest(unittest.TestCase):
     """任务输入清单（manifest.py）与派生视图。"""
 
@@ -851,8 +1013,14 @@ class TestManifestGolden(TestAssemble):
     #   里的「道义」二字不再把「事件与感悟卡模板」误拉进正文提示词；有「关联卷大纲节点」
     #   字段时优先按其中的「核心事件类型/必用模板」判定。fixture 走后一路（无该字段、
     #   section 扫描剔除标准字段），不再内联 10_事件与感悟卡模板 → MANUSCRIPT 哈希缩小。
+    # 2026-09-09：build_prompt 四段化（GATE/PREPARE/ASSEMBLE/EMIT）。OUTLINE 哈希两处变：
+    #   ① _rv_opener_state_outline 的「开篇状态未物化」占位文案改了措辞（fixture 章1 的
+    #      opener 落卷级目录、layout 查章级 → 命中占位分支）；
+    #   ② 07_单章细纲模板.md「## 0. 上下文滑动窗口」注释行改写（摘要由 build_prompt 拼装时
+    #      LLM 生成，不再是「定稿后 Agent 填入」）——该模板整份内联进细纲提示词。
+    #   MANUSCRIPT 不变（正文不内联细纲模板，opener 走 layout step、缺失静默留空）。
     GOLDEN_MANUSCRIPT = "ad4b2753fc4b562e5324d4b15386d8d879e30448227dcd9c21bdc693833e18ef"
-    GOLDEN_OUTLINE = "b4cf3410941f22507711b25f70b89abe42c6e7efab7c98b108dea572f1f3e280"
+    GOLDEN_OUTLINE = "c10d8a5b1462f2053c8cb5550c7ef53ab894ce40e291aecd1f9b14f7a66fe4c3"
 
     def _hash(self, text):
         import hashlib

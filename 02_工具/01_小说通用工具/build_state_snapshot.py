@@ -22,6 +22,10 @@
     #   merge_chapter_state.py / rebuild_global_state.py 写完最新状态后会自动调用本模式。
     python3 02_工具/01_小说通用工具/build_state_snapshot.py --write-chapter-openers <小说目录>
 
+    # 单章开篇状态物化：只写这一章的 00_开篇状态.md（build_prompt.py 准备阶段用）
+    #   —— blast radius 收窄到本章，前序某章履历坏也只影响到那一章的报错
+    python3 02_工具/01_小说通用工具/build_state_snapshot.py --chapter-opener <章目录>
+
     # 履历骨架（A4）：从细纲「## 出场对象」+ 开篇状态 + 卡片动态字段清单，
     #   生成预填「对象/字段/类型/变更类型」的 01_状态履历.md，弱模型只需填「值」列、删无变化行。
     python3 02_工具/01_小说通用工具/build_state_snapshot.py --changelog-skeleton <章目录> [--force]
@@ -56,6 +60,63 @@ def _fold(novel_dir, changelog_paths):
     return records
 
 
+def _emit_opener(novel_dir, state_dir, chap_name, records, prot, *, verbose=True):
+    """把 records 渲染成规范抬头的 00_开篇状态.md 写进 state_dir（<章>/02_状态/）。
+
+    有本章单章细纲的「## 出场对象」小节就按它裁剪，否则写全量并在抬头告警。
+    返回写入路径。
+    """
+    cast = st.parse_chapter_cast(st.plan_path_for_chapter(state_dir, novel_dir), prot)
+    if cast is None:
+        shown, missing = records, None
+    else:
+        present = {r["object_id"] for r in records}
+        shown = [r for r in records if st.cast_contains(cast, r["object_id"])]
+        missing = cast - present
+    out = os.path.join(state_dir, st.CHAPTER_OPENER_FILENAME)
+    st._atomic_write(out, st.render_chapter_opener(shown, chap_name, cast, missing))
+    if verbose:
+        tag = "全量(无出场对象清单)" if cast is None else f"{len(shown)}/{len(records)} 对象"
+        print(f"  开篇状态: {chap_name}  [{tag}]")
+    return out
+
+
+def write_one_chapter_opener(chapter_dir, novel_dir=None, *, verbose=True):
+    """物化单章 00_开篇状态.md（派生视图）。
+
+    chapter_dir 可为章工作区目录（`…/07_章0005`）或其 `02_状态` 子目录。
+    第 N 章开篇状态 = 基线 ⊕ 折叠「排序严格早于本章」的全部章履历，再按本章
+    细纲「## 出场对象」裁剪。
+
+    退出码：基线不存在 → 1；折叠范围内有未合并的描述字段 → 2（`_fold` 内，
+    提示先对涉及章跑 merge_chapter_state.py）。供 build_prompt.py 准备阶段调用。
+    """
+    chapter_dir = os.path.abspath(chapter_dir)
+    state_dir = chapter_dir if os.path.basename(chapter_dir) == "02_状态" \
+        else os.path.join(chapter_dir, "02_状态")
+    nd = os.path.abspath(novel_dir) if novel_dir else st.find_novel_dir(chapter_dir)
+    if not nd:
+        print("错误: 无法定位小说根目录", file=sys.stderr)
+        sys.exit(1)
+    if not os.path.isdir(st.baseline_dir(nd)):
+        print(f"错误: 冻结基线不存在: {st.baseline_dir(nd)}\n"
+              f"      先做基线初始化（技能 08_基线状态初始化），再拼本章提示词。", file=sys.stderr)
+        sys.exit(1)
+
+    synth_cl = os.path.normpath(os.path.join(state_dir, CHANGELOG_FILENAME))
+    try:
+        key = st.chapter_sort_key(synth_cl, nd)
+    except Exception as e:
+        print(f"错误: {e}", file=sys.stderr)
+        sys.exit(1)
+    earlier = [cl for cl in st.iter_workspace_changelogs(nd)
+               if st.chapter_sort_key(cl, nd) < key]
+    records = _fold(nd, earlier)   # 有未合并描述字段 → _fold 内 sys.exit(2)
+    os.makedirs(state_dir, exist_ok=True)
+    return _emit_opener(nd, state_dir, st.chapter_rel_name(synth_cl, nd),
+                        records, st.protagonist_state_id(nd), verbose=verbose)
+
+
 def write_chapter_openers(novel_dir, *, verbose=True):
     """为每章生成/刷新 00_开篇状态.md（派生视图）。
     第 N 章开篇状态 = 基线 ⊕ 折叠「排在第 N 章之前」的全部章履历，再按第 N 章
@@ -81,19 +142,8 @@ def write_chapter_openers(novel_dir, *, verbose=True):
     written = []
 
     def _emit(chap_dir, chap_name, records):
-        cast = st.parse_chapter_cast(st.plan_path_for_chapter(chap_dir, novel_dir), prot)
-        if cast is None:
-            shown, missing = records, None
-        else:
-            present = {r["object_id"] for r in records}
-            shown = [r for r in records if st.cast_contains(cast, r["object_id"])]
-            missing = cast - present
-        out = os.path.join(chap_dir, st.CHAPTER_OPENER_FILENAME)
-        st._atomic_write(out, st.render_chapter_opener(shown, chap_name, cast, missing))
-        written.append(out)
-        if verbose:
-            tag = "全量(无出场对象清单)" if cast is None else f"{len(shown)}/{len(records)} 对象"
-            print(f"  开篇状态: {chap_name}  [{tag}]")
+        written.append(_emit_opener(novel_dir, chap_dir, chap_name, records, prot,
+                                    verbose=verbose))
 
     for i, cl in enumerate(changelogs):
         _emit(os.path.dirname(cl), st.chapter_rel_name(cl, novel_dir),
@@ -393,6 +443,9 @@ def _run():
     g.add_argument("--at-chapter", help="章目录：折叠到该章之前（不含）= 该章开篇状态")
     g.add_argument("--write-chapter-openers", metavar="小说目录",
                    help="为每章生成/刷新 00_开篇状态.md（按细纲「## 出场对象」裁剪）")
+    g.add_argument("--chapter-opener", metavar="章目录",
+                   help="只物化这一章的 00_开篇状态.md（章工作区目录或其 02_状态 子目录）；"
+                        "供 build_prompt.py 准备阶段调用")
     g.add_argument("--changelog-skeleton", metavar="章目录",
                    help="生成预填的 01_状态履历.md 骨架（对象/字段/类型/变更类型已排好，只需填「值」）")
     ap.add_argument("--novel-dir", help="小说根目录（缺省自动定位）")
@@ -419,6 +472,19 @@ def _run():
                            tool="build_state_snapshot.py --write-chapter-openers")
         w = write_chapter_openers(nd)
         print(f"共刷新 {len(w)} 个 00_开篇状态.md")
+        return
+
+    if args.chapter_opener:
+        cd = os.path.abspath(args.chapter_opener)
+        nd = os.path.abspath(args.novel_dir) if args.novel_dir else st.find_novel_dir(cd)
+        if not nd:
+            print("错误: 无法定位小说根目录", file=sys.stderr)
+            sys.exit(1)
+        # W6.2：写 <章>/02_状态/00_开篇状态.md，与 --write-chapter-openers 同样独占状态树。
+        acquire_until_exit(os.path.join(nd, "05_工作区", "02_状态"),
+                           tool="build_state_snapshot.py --chapter-opener")
+        out = write_one_chapter_opener(cd, nd)
+        print(f"已物化开篇状态: {out}")
         return
 
     anchor = os.path.abspath(args.volume_dir or args.at_chapter)

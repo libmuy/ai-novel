@@ -21,16 +21,31 @@
     --force       覆盖已存在的提示词存档（默认只创建、不覆盖）
     --no-prebuild 不预建回填 / 目标空文件
 
+四段流程
+--------
+    GATE      只查 canonical 数据成熟度（`00_进度.md` 里必读前置是否「定稿」）。
+              不过 → 只出阻断报告，一个文件都不写。
+    PREPARE   物化本章派生输入：
+                · 开篇状态  —— 确定性折叠（`build_state_snapshot.py --chapter-opener`）
+                · 上章摘要  —— LLM 压缩（细纲任务、非首章）
+              任一失败 → 阻断报告 + 退出 2，不写存档 / 不预建。
+              `--dry-run` 下不执行、只探测并报告。
+    ASSEMBLE  纯读：把模板 + 定稿数据 + 已物化的派生输入拼成提示词文本。
+    EMIT      写提示词存档、预建回填 / 目标空文件。
+
 退出码
 ------
-    0 = 已生成    1 = 用法/读取错误    2 = 前置门禁未过（已输出阻断报告，未写任何文件）
+    0 = 已生成    1 = 用法/读取错误    2 = 前置门禁 / 准备阶段未过（已输出阻断报告，未写任何文件）
     3 = 生成了但内部标识自检未过（提示词已写出，需人工过一遍）
 """
 import argparse
+import subprocess
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+_HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(_HERE))
 
 from prompt_build import assemble, layout as L, leak, progress  # noqa: E402
 
@@ -64,11 +79,8 @@ def _gate(ctx: assemble.Ctx, task: str) -> list[progress.Blocker]:
                 L.rel(ctx.novel_dir, lay.outline), idx.status_of(lay.outline), "定稿",
                 "跑 `review_manuscript.py --chapter-dir <本章> --mode outline` 收敛必改项，"
                 "清零后在 `00_进度.md` 标定稿"))
-        if not lay.opener_state.exists():
-            blockers.append(progress.Blocker(
-                "本章开篇状态未物化——正文的主要状态载荷",
-                L.rel(ctx.novel_dir, lay.opener_state), None, "已物化",
-                "跑 `build_state_snapshot.py --write-chapter-openers`"))
+        # 开篇状态不在这里 gate：它是派生视图，由 PREPARE 阶段确定性物化；
+        # 前序章未折叠导致物化失败会在 PREPARE 里转成阻断项。
     else:  # 细纲
         if not lay.volume_plan.exists():
             blockers.append(progress.Blocker(
@@ -86,7 +98,119 @@ def _gate(ctx: assemble.Ctx, task: str) -> list[progress.Blocker]:
                 L.rel(ctx.novel_dir, lay.manuscript.parent / f"章{lay.chapter - 1:04d}.md"),
                 None, "已落位（建议定稿）",
                 "先把上一章正文落位到 `10_正文/…`"))
+        elif lay.chapter > 1:
+            # 上一章正文落位了，但履历没写 → PREPARE 折叠会看不到它、开篇状态静默偏旧。
+            prev_cl = next(iter(sorted(
+                lay.chapter_dir.parent.glob(f"*_章{lay.chapter - 1:04d}/02_状态/01_状态履历.md"))), None)
+            if prev_cl is None or prev_cl.read_text(encoding="utf-8", errors="ignore").lstrip().startswith(">"):
+                blockers.append(progress.Blocker(
+                    "上一章状态履历未写——本章开篇状态会漏掉上一章的状态变化",
+                    L.rel(ctx.novel_dir, prev_cl) if prev_cl else
+                    f"05_工作区/…/*_章{lay.chapter - 1:04d}/02_状态/01_状态履历.md",
+                    None, "已填值并跑过 merge_chapter_state.py",
+                    "对上一章跑 `build_state_snapshot.py --changelog-skeleton` 填值 → "
+                    "`merge_chapter_state.py --chapter-dir <上一章目录>`，再重拼"))
     return blockers
+
+
+@dataclass
+class _Prep:
+    blockers: list = field(default_factory=list)   # progress.Blocker
+    notes: list = field(default_factory=list)      # (label, detail) —— 进报告
+
+
+def _indent(s: str, n: int = 4) -> str:
+    s = (s or "").strip()
+    return "\n".join(" " * n + ln for ln in s.splitlines()) if s else ""
+
+
+def _probe_llm() -> str:
+    """--dry-run 时探一下 LLM 通路，好提前告知『正式跑会不会被阻断』。"""
+    try:
+        sys.path.insert(0, str(_HERE.parent / "00_系统级"))
+        import shutil
+        from _llm import load_llm_config, _probe_base_url
+        cfg = load_llm_config()
+        if _probe_base_url(cfg.base_url, timeout=2):
+            return "LLM 端点可达"
+        if shutil.which("opencode"):
+            return "端点不可达，正式跑降级 opencode"
+        return "⚠ 端点不可达且未装 opencode——正式跑会被阻断"
+    except Exception as e:  # 配置缺失等
+        return f"⚠ LLM 不可用：{e}"
+
+
+def _gen_prev_summary(ctx: assemble.Ctx, prev_path: Path) -> str:
+    sys.path.insert(0, str(_HERE.parent / "00_系统级"))
+    from _llm import load_llm_config, summarize_chapter
+    cfg = load_llm_config()
+    return summarize_chapter(cfg, prev_path.read_text(encoding="utf-8", errors="ignore"))
+
+
+def _prepare(ctx: assemble.Ctx, task: str, *, dry_run: bool) -> _Prep:
+    """物化派生输入（开篇状态 / 上章摘要）。任一失败 → prep.blockers 非空。"""
+    prep = _Prep()
+    lay = ctx.layout
+
+    # ── (a) 开篇状态：确定性折叠，细纲 & 正文都要 ──
+    if dry_run:
+        prep.notes.append(("开篇状态", "将物化本章 `00_开篇状态.md`（确定性折叠）"))
+    else:
+        r = subprocess.run(
+            [sys.executable, str(_HERE / "build_state_snapshot.py"),
+             "--chapter-opener", str(lay.state_dir),
+             "--novel-dir", str(ctx.novel_dir)],
+            capture_output=True, text=True)
+        detail = ((r.stdout or "") + (r.stderr or "")).strip()[-1200:]
+        if r.returncode == 0:
+            prep.notes.append(("开篇状态", "已物化"))
+        elif r.returncode == 2:
+            prep.blockers.append(progress.Blocker(
+                "前序章状态未折叠——本章开篇状态无法物化",
+                L.rel(ctx.novel_dir, lay.opener_state), None,
+                "报错点名的前序章跑过 merge_chapter_state.py",
+                "对下方点名的章跑 `merge_chapter_state.py --chapter-dir <章目录>` 后重拼：\n"
+                + _indent(detail)))
+        elif r.returncode == 3:
+            prep.blockers.append(progress.Blocker(
+                "状态树写锁被占用——有其他状态工具在跑",
+                L.rel(ctx.novel_dir, lay.opener_state), None, "锁释放后重试",
+                "等并发的状态工具结束后重跑本命令：\n" + _indent(detail)))
+        else:
+            prep.blockers.append(progress.Blocker(
+                "本章开篇状态物化失败",
+                L.rel(ctx.novel_dir, lay.opener_state), None, "已物化",
+                _indent(detail) or "见 stderr"))
+
+    # ── (b) 上章摘要：LLM 压缩，仅细纲、仅非首章 ──
+    if task == "细纲" and lay.chapter > 1:
+        digest = lay.prompt_dir / assemble.SUMMARY_FILENAME
+        prev = assemble.resolve_prev_manuscript(ctx)
+        got = assemble.read_prev_summary(digest)
+        if got is not None:
+            _body, unreviewed = got
+            prep.notes.append(("上章摘要",
+                               "复用现有（LLM 生成待复核）" if unreviewed else "复用现有（人工版）"))
+        elif prev is None:
+            pass  # gate 已拦「上一章正文未落位」
+        elif dry_run:
+            prep.notes.append(("上章摘要", f"将由 LLM 生成（{_probe_llm()}）"))
+        else:
+            try:
+                summary = _gen_prev_summary(ctx, prev)
+            except Exception as e:
+                prep.blockers.append(progress.Blocker(
+                    "上章摘要无法生成——LLM 不可用",
+                    L.rel(ctx.novel_dir, digest), None, "已生成 / 人工写入",
+                    "启动 LLM 端点或安装 opencode 后重拼；"
+                    f"或手写 `{L.rel(ctx.novel_dir, digest)}`（不带出处标记）后重拼。\n"
+                    + _indent(str(e))))
+            else:
+                assemble.write_prev_summary(digest, summary)
+                over = "（超 300 字，落位时酌情精简）" if len(summary) > 345 else ""
+                prep.notes.append(("上章摘要", f"已由 LLM 生成、待冷读复核{over}"))
+
+    return prep
 
 
 def main() -> int:
@@ -123,12 +247,19 @@ def main() -> int:
     ctx = assemble.Ctx(novel_dir=novel_dir, repo_root=repo_root, layout=lay,
                        novel_name=novel_dir.name.split("_", 1)[-1])
 
-    # ── 前置门禁：不过就只出阻断报告，一个文件都不写 ──
+    # ── 阶段 1  GATE：只查 canonical 成熟度，不过就只出阻断报告、一个文件都不写 ──
     blockers = _gate(ctx, args.task)
     if blockers:
         print(progress.render_block_report(ctx.novel_name, TASKS[args.task][0], blockers))
         return 2
 
+    # ── 阶段 2  PREPARE：物化派生输入（开篇状态 / 上章摘要）──
+    prep = _prepare(ctx, args.task, dry_run=args.dry_run)
+    if prep.blockers:
+        print(progress.render_block_report(ctx.novel_name, TASKS[args.task][0], prep.blockers))
+        return 2
+
+    # ── 阶段 3  ASSEMBLE：纯读 ──
     prompt = (assemble.build_manuscript(ctx) if args.task == "正文"
               else assemble.build_outline(ctx))
 
@@ -137,9 +268,11 @@ def main() -> int:
     target = lay.manuscript if args.task == "正文" else lay.outline
     text = prompt.render()
 
-    # ── 报告 ──
+    # ── 阶段 4  EMIT：报告 + 写文件 ──
     st = prompt.stats()
     print(f"《{ctx.novel_name}》{lay.chapter_id} · {TASKS[args.task][0]}")
+    for label, detail in prep.notes:
+        print(f"  {label}　　　{detail}")
     print(f"  提示词　　　{L.rel(novel_dir, archive)}")
     print(f"  体量　　　　{st['字节数'] // 1024} KB（{st['区块数']} 区块，"
           f"其中 {st['逐字内联区块']} 个逐字内联）")
