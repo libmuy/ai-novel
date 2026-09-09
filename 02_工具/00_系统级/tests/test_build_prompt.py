@@ -784,7 +784,7 @@ class TestBuildPromptCLI(unittest.TestCase):
 
 
 class TestPrevSummaryFile(unittest.TestCase):
-    """assemble.read_prev_summary / write_prev_summary —— 上章摘要文件的三态识别。"""
+    """assemble.read_prev_summary / write_prev_summary —— 上章摘要文件读写。"""
 
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
@@ -800,25 +800,12 @@ class TestPrevSummaryFile(unittest.TestCase):
         _write(f, ">>> 待人工确认：上章摘要缺失\n>>> 提示\n")
         self.assertIsNone(assemble.read_prev_summary(f))
 
-    def test_human_version_is_reviewed(self):
-        f = self.tmp / "上章摘要.md"
-        _write(f, "苏砚吞灵草突破，经脉受损。\n")
-        body, unreviewed = assemble.read_prev_summary(f)
-        self.assertEqual(body, "苏砚吞灵草突破，经脉受损。")
-        self.assertFalse(unreviewed)
-
-    def test_llm_version_roundtrips_with_marker(self):
+    def test_roundtrip_plain_text_no_marker(self):
         f = self.tmp / "上章摘要.md"
         assemble.write_prev_summary(f, "  苏砚吞灵草突破，经脉受损。  ")
         raw = f.read_text(encoding="utf-8")
-        self.assertTrue(raw.splitlines()[0].startswith("<!-- 上章摘要 · LLM 生成待人工复核"))
-        body, unreviewed = assemble.read_prev_summary(f)
-        self.assertEqual(body, "苏砚吞灵草突破，经脉受损。")
-        self.assertTrue(unreviewed)
-        # 删掉首行标记 → 转为「人工版」
-        _write(f, body + "\n")
-        _b, unreviewed2 = assemble.read_prev_summary(f)
-        self.assertFalse(unreviewed2)
+        self.assertNotIn("<!--", raw)                        # 不留任何标记
+        self.assertEqual(assemble.read_prev_summary(f), "苏砚吞灵草突破，经脉受损。")
 
 
 class TestChapterOpenerCLI(unittest.TestCase):
@@ -1017,10 +1004,11 @@ class TestManifestGolden(TestAssemble):
     #   ① _rv_opener_state_outline 的「开篇状态未物化」占位文案改了措辞（fixture 章1 的
     #      opener 落卷级目录、layout 查章级 → 命中占位分支）；
     #   ② 07_单章细纲模板.md「## 0. 上下文滑动窗口」注释行改写（摘要由 build_prompt 拼装时
-    #      LLM 生成，不再是「定稿后 Agent 填入」）——该模板整份内联进细纲提示词。
+    #      LLM 生成、作者发云端前自行复核，不再是「定稿后 Agent 填入」）——该模板整份内联进
+    #      细纲提示词，措辞两次微调各改一次哈希。
     #   MANUSCRIPT 不变（正文不内联细纲模板，opener 走 layout step、缺失静默留空）。
     GOLDEN_MANUSCRIPT = "ad4b2753fc4b562e5324d4b15386d8d879e30448227dcd9c21bdc693833e18ef"
-    GOLDEN_OUTLINE = "c10d8a5b1462f2053c8cb5550c7ef53ab894ce40e291aecd1f9b14f7a66fe4c3"
+    GOLDEN_OUTLINE = "0b4b854152ab5b3feae6814b7f8171610eedc295e1531b35ae70eb381d7b2035"
 
     def _hash(self, text):
         import hashlib

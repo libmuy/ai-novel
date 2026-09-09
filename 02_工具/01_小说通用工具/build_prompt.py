@@ -186,11 +186,8 @@ def _prepare(ctx: assemble.Ctx, task: str, *, dry_run: bool) -> _Prep:
     if task == "细纲" and lay.chapter > 1:
         digest = lay.prompt_dir / assemble.SUMMARY_FILENAME
         prev = assemble.resolve_prev_manuscript(ctx)
-        got = assemble.read_prev_summary(digest)
-        if got is not None:
-            _body, unreviewed = got
-            prep.notes.append(("上章摘要",
-                               "复用现有（LLM 生成待复核）" if unreviewed else "复用现有（人工版）"))
+        if assemble.read_prev_summary(digest) is not None:
+            prep.notes.append(("上章摘要", "复用现有"))
         elif prev is None:
             pass  # gate 已拦「上一章正文未落位」
         elif dry_run:
@@ -203,12 +200,11 @@ def _prepare(ctx: assemble.Ctx, task: str, *, dry_run: bool) -> _Prep:
                     "上章摘要无法生成——LLM 不可用",
                     L.rel(ctx.novel_dir, digest), None, "已生成 / 人工写入",
                     "启动 LLM 端点或安装 opencode 后重拼；"
-                    f"或手写 `{L.rel(ctx.novel_dir, digest)}`（不带出处标记）后重拼。\n"
-                    + _indent(str(e))))
+                    f"或手写 `{L.rel(ctx.novel_dir, digest)}` 后重拼。\n" + _indent(str(e))))
             else:
                 assemble.write_prev_summary(digest, summary)
-                over = "（超 300 字，落位时酌情精简）" if len(summary) > 345 else ""
-                prep.notes.append(("上章摘要", f"已由 LLM 生成、待冷读复核{over}"))
+                over = "，超 300 字、落位时酌情精简" if len(summary) > 345 else ""
+                prep.notes.append(("上章摘要", f"已由 LLM 生成——发云端前请自行复核衔接{over}"))
 
     return prep
 

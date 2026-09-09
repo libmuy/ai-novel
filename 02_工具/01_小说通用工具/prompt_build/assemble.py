@@ -13,7 +13,6 @@
    要么是从结构化字段（节拍表行、出场对象表、场景表）机械导出的。
    需要作者判断的地方一律留 `>>> 待人工确认` 标记，绝不代笔。
 """
-import datetime
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -968,34 +967,25 @@ def _outline_selfcheck() -> str:
 
 # 上章摘要存 `00_提示词/上章摘要.md`（无数字前缀：辅助输入，不参与 WS006 产出配对）。
 # 生成 = LLM 压缩，由 build_prompt.py 的准备阶段负责（见该脚本 _prepare）；本模块只读。
+# 不在文件里留出处标记——作者发云端前自行复核，复核完直接让 Agent 往下走。
 SUMMARY_FILENAME = "上章摘要.md"
-_SUMMARY_LLM_MARKER = "<!-- 上章摘要 · LLM 生成待人工复核"
 
 
-def read_prev_summary(digest: Path):
-    """读 上章摘要.md。返回：
-
-    - None                      文件缺失 / 空 / 仍是 `>>>` 占位
-    - (正文, unreviewed: bool)   unreviewed=True 表示首行是 LLM 出处标记、尚未人工复核
-    """
+def read_prev_summary(digest: Path) -> Optional[str]:
+    """读 上章摘要.md 正文。文件缺失 / 空 / 仍是 `>>>` 占位 → None。"""
     try:
         raw = digest.read_text(encoding="utf-8") if digest.exists() else ""
     except OSError:
         raw = ""
     if not raw.strip() or raw.lstrip().startswith(">>>"):
         return None
-    lines = raw.splitlines()
-    if lines and lines[0].strip().startswith(_SUMMARY_LLM_MARKER):
-        return "\n".join(lines[1:]).strip(), True
-    return raw.strip(), False
+    return raw.strip()
 
 
 def write_prev_summary(digest: Path, text: str) -> None:
-    """写 LLM 生成的上章摘要，首行带出处标记（人工复核并接受后删掉首行即转为人工版）。"""
+    """写 LLM 生成的上章摘要（纯正文，无标记）。"""
     digest.parent.mkdir(parents=True, exist_ok=True)
-    marker = (f"{_SUMMARY_LLM_MARKER} · {datetime.date.today().isoformat()} · "
-              "复核衔接、接受后删除此行 -->")
-    digest.write_text(marker + "\n" + text.strip() + "\n", encoding="utf-8")
+    digest.write_text(text.strip() + "\n", encoding="utf-8")
 
 
 def _sliding_window(ctx: Ctx, todos: list[str]) -> str:
@@ -1011,18 +1001,13 @@ def _sliding_window(ctx: Ctx, todos: list[str]) -> str:
     head = ("### 上章结尾原文（最后 500 字，正文须紧密承接其场景与语气）\n\n"
             "```\n" + tail + "\n```\n\n### 上章末尾摘要\n\n")
     digest = L.prompt_dir / SUMMARY_FILENAME
-    got = read_prev_summary(digest)
-    if got is None:
+    summary = read_prev_summary(digest)
+    if summary is None:
         return head + _todo(
             todos, "上章摘要缺失",
             f"正常由 `build_prompt.py` 准备阶段调 LLM 生成写入 `{rel(ctx.novel_dir, digest)}`；"
             "见到此占位说明当次是 --dry-run，或摘要生成被阻断（LLM 不可用）")
-    body, unreviewed = got
-    if unreviewed:
-        todos.append(
-            f"上章摘要为 LLM 生成、未经人工复核——冷读时须校对与上一章的衔接，"
-            f"确认后删掉 `{rel(ctx.novel_dir, digest)}` 首行的出处标记")
-    return head + body + "\n"
+    return head + summary + "\n"
 
 
 def resolve_prev_manuscript(ctx: Ctx) -> Optional[Path]:
