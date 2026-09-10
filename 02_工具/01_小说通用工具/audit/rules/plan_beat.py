@@ -11,6 +11,12 @@
 - PLAN_BEAT003 (warning)：卷大纲其它区块的某行同时出现「第N章」和某对象
   （@人物/@势力/@伏笔/FH-号），但第 N 章节拍表摘要没有对应 @引用；
   或该行提到「第N章」而节拍表根本没有第 N 章行。
+- PLAN_BEAT007 (warning)：【本卷核心法宝/功法】列出的招牌法宝/功法，在节拍表
+  任何一章摘要里都追溯不到（它到底第几章挣到手 / 关键使用在哪一章？）。
+
+节拍表摘要只承载**主干对象**（主角 / 主要配角 / 埋收的 FH / 本卷核心法宝功法 /
+关系变化双方 / 退场配角）；一次性配角、背景势力、场景地名等次要对象不进卷大纲，
+由任务11 设计单章时补进该章【出场对象】表——本规则不追次要对象。
 """
 import re
 from typing import List, Dict, Set, Tuple
@@ -243,6 +249,7 @@ class PlanBeatRule(AuditRule):
         out.extend(self._check_deathclock(rel, fi, context, _rows_under, all_beat_names,
                                           exit_section_names, volend_text))
         out.extend(self._check_relation_arc(rel, _rows_under, all_beat_names, all_beat_text))
+        out.extend(self._check_core_artifacts(rel, _rows_under, all_beat_names, all_beat_text))
         return out
 
     # --- PLAN_BEAT004：退场配角完整性 ---
@@ -302,6 +309,28 @@ class PlanBeatRule(AuditRule):
             message=f"{len(bad)} 处：寿元/续命倒计时类配角，本卷未明确交代其存殁",
             file=None,
             suggestion="在【退场配角】或【卷末状态】对该角色本卷是否退场给出明确说法（规则不替你决定生死，只要求不沉默）。",
+            category="03_规划", locations=bad,
+        )]
+
+    # --- PLAN_BEAT007：本卷核心法宝/功法须在节拍表摘要里追溯得到 ---
+    def _check_core_artifacts(self, rel, rows_under, all_beat_names, all_beat_text) -> List[Finding]:
+        bad: List[str] = []
+        def _pred(s: str) -> bool:
+            return ("核心法宝" in s or "核心功法" in s
+                    or ("招牌" in s and ("法宝" in s or "功法" in s)))
+        for sec, rlineno, cells in rows_under(_pred):
+            for r in sorted(_refs_in(" ".join(cells))):
+                if r == "@主角":
+                    continue
+                if r not in all_beat_names and r not in all_beat_text:
+                    bad.append(f"{rel}:{rlineno}（本卷核心法宝/功法「{r}」，节拍表任何一章摘要都没 @引用 它）")
+        if not bad:
+            return []
+        return [Finding(
+            severity=Severity.WARNING, rule=self.name, code="PLAN_BEAT007",
+            message=f"{len(bad)} 处：【本卷核心法宝/功法】列出的招牌物，在节拍表摘要里追溯不到",
+            file=None,
+            suggestion="招牌法宝/功法的获得或关键使用那一章，其节拍表摘要须 @引用 此物（@资源.[名]/@物品.[名]）。",
             category="03_规划", locations=bad,
         )]
 

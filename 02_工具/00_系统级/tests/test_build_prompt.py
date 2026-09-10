@@ -1020,8 +1020,11 @@ class TestManifestGolden(TestAssemble):
     #   「轻埋伏笔不剧透」，只内联进 OUTLINE。
     # 2026-09-10（弱模型胜任 · 第一期）：`07_单章细纲模板` 出场对象注加「配角一律 `@人物.[姓名]`，
     #   `@角色.X` 是持有者/师承字段写法、别用在本表」——只内联进 OUTLINE。
+    # 2026-09-10（卷大纲精简出场对象 · 每卷招牌法宝功法）：`07_单章细纲模板` 出场对象注加
+    #   「本表是本章出场对象的权威，允许多于卷大纲节拍表——卷纲摘要只点主干，次要对象本层按需补齐」
+    #   ——只内联进 OUTLINE。
     GOLDEN_MANUSCRIPT = "c915b798afafa87c81792de177ae90b7b7945cabf0c412bc9d445f29c64c29e7"
-    GOLDEN_OUTLINE = "731e3ecbecdda5c5403b11290fc7287c05061540795430ec610d44ca9138e657"
+    GOLDEN_OUTLINE = "dc3bbfb5f7a791abb0cefd7ecc00d233975d39b5d348f65a813560b718180b95"
 
     def _hash(self, text):
         import hashlib
