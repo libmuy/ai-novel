@@ -651,6 +651,37 @@ class TestAuditEngine(unittest.TestCase):
             "# 卷大纲\n\n| 第24章 | @主角 斩杀 @人物.[屠铁砧] | ... | 战斗 | 重钩 |\n")
         self.assertNotIn("DBCHAP001", found)
 
+    # ---- planning · PLAN023：单章细纲场景段结构（canonical `### 第N场景`）----
+
+    def _run_planning(self, rel_path: str, body: str):
+        p = self.novel_dir / rel_path
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(body, encoding="utf-8")
+        return {f.code: f for f in PlanningRule().run(AuditContext(self.novel_dir))}
+
+    def test_plan023_scene_list_without_canonical_heading_flagged(self):
+        found = self._run_planning(
+            "03_规划/01_第01部/01_卷01/规划_卷01_章0005.md",
+            "# 细纲\n\n## 【场景列表】\n\n### 场景概览\n\n"
+            "| 序号 | 字数 |\n|---|---|\n| 第1场景 | 900字 |\n\n"
+            "### 场景详细拆解\n\n#### 场景 1：废矿道\n- 要点\n\n## 【章级钩子】\n")
+        self.assertIn("PLAN023", found)
+        self.assertIn("章0005", "".join(found["PLAN023"].locations))
+
+    def test_plan023_canonical_scene_heading_ok(self):
+        found = self._run_planning(
+            "03_规划/01_第01部/01_卷01/规划_卷01_章0006.md",
+            "# 细纲\n\n## 【场景列表】\n\n### 第1场景\n\n"
+            "| 字段 | 内容 |\n|---|---|\n| 场景字数 | 900字 |\n\n"
+            "**场景要点**\n\n- 要点\n\n## 【章级钩子】\n")
+        self.assertNotIn("PLAN023", found)
+
+    def test_plan023_ignores_non_outline_planning_files(self):
+        found = self._run_planning(
+            "03_规划/01_第01部/01_卷01/规划_卷01.md",
+            "# 卷大纲\n\n## 【场景列表】\n\n随手写的一段，没有场景标题。\n")
+        self.assertNotIn("PLAN023", found)
+
     # ---- redline：常驻红线包蒸馏视图守护（§二·A 第 3 类）----
 
     _RL_SIX = ("## 六、禁用词（高频项摘录）\n\n"

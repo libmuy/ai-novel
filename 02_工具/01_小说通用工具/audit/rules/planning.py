@@ -11,6 +11,14 @@ from ..resolver.reference_resolver import ReferenceResolver
 
 CHAPTER_REF_PATTERN = re.compile(r"第(?P<chap>\d+)章(?:\s*→\s*(?P<path>10_正文/[^\s\n\r]+))?")
 
+# 单章细纲文件名：规划_卷NN_章NNNN.md
+OUTLINE_FILE_PATTERN = re.compile(r"规划_卷\d+_章\d+\.md$")
+# 细纲场景段的 canonical 结构：`## 【场景列表】` 下每场一个 `### 第N场景` 标题
+# （见 规划_卷01_章0004.md）。`build_prompt.py --task 正文` 的 `extract.scene_blocks`
+# 只认这个形态——认不到就取不到逐场字数预算，正文提示词会留 `>>>` 空洞。
+SCENE_LIST_HEADING = re.compile(r"^##\s*【?场景列表】?\s*$", re.M)
+SCENE_HEADING = re.compile(r"^#{3,4}\s+第\s*\d+\s*场景", re.M)
+
 
 class PlanningRule(AuditRule):
     name = "planning"
@@ -46,6 +54,32 @@ class PlanningRule(AuditRule):
                                 category="03_规划",
                                 locations=[f"{fi.relative_path}:第{idx}行"]
                             ))
+
+            # PLAN023：单章细纲场景段结构必须是 `### 第N场景`（canonical，见 ch4）
+            if OUTLINE_FILE_PATTERN.search(fi.relative_path):
+                mhead = SCENE_LIST_HEADING.search(fi.content)
+                if mhead:
+                    tail = fi.content[mhead.end():]
+                    nxt = re.search(r"^##\s", tail, re.M)
+                    body = tail[:nxt.start()] if nxt else tail
+                    if not SCENE_HEADING.search(body):
+                        findings.append(Finding(
+                            severity=Severity.ERROR,
+                            rule=self.name,
+                            code="PLAN023",
+                            message="单章细纲【场景列表】下没有 `### 第N场景` 标题——"
+                                    "`build_prompt.py --task 正文` 取不到逐场字数预算，正文提示词会留空洞",
+                            file=fi.relative_path,
+                            line=fi.content[:mhead.start()].count("\n") + 1,
+                            source="## 【场景列表】",
+                            target="### 第N场景",
+                            suggestion="把场景段改成 canonical 结构：每场一个 `### 第N场景` 标题 + "
+                                       "`| 字段 | 内容 |` 表（场景序号/地点/字数/功能/内容简述/出场角色/"
+                                       "涉及资源/涉及伏笔/场景钩子）+ `**场景要点**`，见 "
+                                       "`03_规划/01_第01部/01_卷01/规划_卷01_章0004.md`",
+                            category="03_规划",
+                            locations=[f"{fi.relative_path}:第{fi.content[:mhead.start()].count(chr(10)) + 1}行"]
+                        ))
 
             # 检查对象引用
             file_refs = resolver.extract_references(fi)

@@ -12,8 +12,9 @@ from ..novel_meta import protagonist_name
 
 # @类型.名称 引用正则
 # 支持 @人物.苏砚, @势力.黑石会, @地名.枯港矿城, @类型.[TODO-xxx], @类型.[苏砚]
+# `角色` 是 `人物` 的别名（持有者/师承 字段的枚举值历来写 `@角色.[X]`）——解析后统一归一到 `人物`。
 OBJECT_REF_PATTERN = re.compile(
-    r"@(?P<type>地名|势力|人物|类型|书籍|伏笔|区域|资源|修炼体系)\.(?:\[(?P<bracket_target>[^\]]+)\]|(?P<raw_target>[^\s\n\r\t，。！？；：、（）“”‘’«»〈〉《》`~!@#$%^&*()+=|\\{}:;\"'\''<>,/?]+))"
+    r"@(?P<type>地名|势力|人物|角色|类型|书籍|伏笔|区域|资源|修炼体系)\.(?:\[(?P<bracket_target>[^\]]+)\]|(?P<raw_target>[^\s\n\r\t，。！？；：、（）“”‘’«»〈〉《》`~!@#$%^&*()+=|\\{}:;\"'\''<>,/?]+))"
 )
 
 # Markdown 链接正则 [label](url)
@@ -53,6 +54,8 @@ class ReferenceResolver:
             # 1. 解析对象引用 @类型.名称
             for m in OBJECT_REF_PATTERN.finditer(line):
                 ref_type = m.group("type")
+                if ref_type == "角色":          # `@角色.X` 归一到 `人物`
+                    ref_type = "人物"
                 bracket_target = m.group("bracket_target")
                 raw_target = m.group("raw_target")
                 target = bracket_target if bracket_target is not None else raw_target

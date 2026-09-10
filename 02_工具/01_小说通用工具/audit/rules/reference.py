@@ -9,8 +9,9 @@ from ..engine import AuditRule
 from ..context import AuditContext
 from ..resolver.reference_resolver import ReferenceResolver
 
-# 名称类引用漏方括号——resolver 的 OBJECT_REF_PATTERN 不认 物品/关系，这里补一道纯文本扫描。
-# `@物品.[矿钉]` / `@关系.[甲&乙]` 方括号强制；`@角色.苏砚` / `@主角` / `@伏笔.FH-xxx` 用 ID、不在此列。
+# 名称类引用漏方括号——resolver 的 OBJECT_REF_PATTERN 不认 物品/财务/关系，这里补一道纯文本扫描。
+# `@物品.[矿钉]` / `@关系.[甲&乙]` 方括号强制；`@主角` / `@伏笔.FH-xxx` / `@道义.DY-xxx` 用 ID、不在此列。
+# （`@人物./@角色.` 由 resolver 直接解析——漏方括号走 REF003 主路径，不在这道补扫里。）
 _BARE_NAMED_REF = re.compile(r"@(物品|关系)\.(?!\[)([^\s\n\r\t，。！？；：、（）\[\]`|]+)")
 
 CATEGORY_DIR_MAP = {

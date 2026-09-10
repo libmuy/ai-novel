@@ -235,6 +235,13 @@ class TestExtractSceneBlocks(unittest.TestCase):
         self.assertIn("内容1", scenes[0][1])
         self.assertIn("内容2", scenes[1][1])
 
+    def test_scene_blocks_rejects_non_canonical_heading(self):
+        """`#### 场景 N：标题`（云端弱模型常见变体）不是 canonical 形态——
+        取不到场景 → build_prompt 正文的逐场字数预算会留空洞（PLAN023 / GATE 拦）。"""
+        text = ("## 【场景列表】\n\n### 场景概览\n\n| 序号 | 字数 |\n|---|---|\n"
+                "| 第1场景 | 900字 |\n\n### 场景详细拆解\n\n#### 场景 1：废矿道\n- 要点\n")
+        self.assertEqual(extract.scene_blocks(text), [])
+
 
 class TestExtractReadSections(unittest.TestCase):
     """extract.read_sections / sections_present —— 「区块被改名 → 静默丢失」是这批测试要锁死的契约。"""
@@ -1011,8 +1018,10 @@ class TestManifestGolden(TestAssemble):
     #   （现实古籍文句正文可用、只须不具名）→ 随 `_校验版` 切片内联进 MANUSCRIPT 与 OUTLINE 两者。
     #   `07_单章细纲模板` 加「出场对象只放建卡对象/白名单」「内容简述禁结构指代」「新设定不计已有设定」
     #   「轻埋伏笔不剧透」，只内联进 OUTLINE。
+    # 2026-09-10（弱模型胜任 · 第一期）：`07_单章细纲模板` 出场对象注加「配角一律 `@人物.[姓名]`，
+    #   `@角色.X` 是持有者/师承字段写法、别用在本表」——只内联进 OUTLINE。
     GOLDEN_MANUSCRIPT = "c915b798afafa87c81792de177ae90b7b7945cabf0c412bc9d445f29c64c29e7"
-    GOLDEN_OUTLINE = "083ea5d3cd48c54d2b3b6cefc4cb5b991196281ed7aebc2e4c593c7258633ef1"
+    GOLDEN_OUTLINE = "731e3ecbecdda5c5403b11290fc7287c05061540795430ec610d44ca9138e657"
 
     def _hash(self, text):
         import hashlib

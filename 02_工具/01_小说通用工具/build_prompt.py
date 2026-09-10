@@ -81,6 +81,15 @@ def _gate(ctx: assemble.Ctx, task: str) -> list[progress.Blocker]:
                 "清零后在 `00_进度.md` 标定稿"))
         # 开篇状态不在这里 gate：它是派生视图，由 PREPARE 阶段确定性物化；
         # 前序章未折叠导致物化失败会在 PREPARE 里转成阻断项。
+        if lay.outline.exists():
+            otext = lay.outline.read_text(encoding="utf-8", errors="ignore")
+            if assemble.extract.read_section(otext, "【场景列表】") \
+                    and not assemble.extract.scene_blocks(otext):
+                blockers.append(progress.Blocker(
+                    "细纲【场景列表】认不到 `### 第N场景` 结构——逐场字数预算会拼成空洞",
+                    L.rel(ctx.novel_dir, lay.outline), None, "canonical 结构（见 ch4 细纲）",
+                    "把场景段改成每场一个 `### 第N场景` 标题 + 字段表 + `**场景要点**`，"
+                    "参 `03_规划/01_第01部/01_卷01/规划_卷01_章0004.md`；审计同规则 PLAN023"))
     else:  # 细纲
         if not lay.volume_plan.exists():
             blockers.append(progress.Blocker(

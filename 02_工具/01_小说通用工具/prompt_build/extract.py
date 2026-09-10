@@ -26,7 +26,8 @@ CARD_ROUTES = {
 # 这些前缀是状态对象，没有独立卡片，值来自 00_开篇状态.md
 STATE_ONLY_TYPES = {"物品", "财务", "关系", "世界"}
 
-_REF_RE = re.compile(r"@(?P<type>主角|人物|势力|地名|区域|书籍|物品|财务|关系|伏笔|道义|资源|类型|世界)"
+# `角色` 是 `人物` 的别名（持有者/师承 字段历来写 `@角色.[X]`）——parse_refs 里归一到 `人物`。
+_REF_RE = re.compile(r"@(?P<type>主角|人物|角色|势力|地名|区域|书籍|物品|财务|关系|伏笔|道义|资源|类型|世界)"
                      r"(?:\.(?:\[(?P<b>[^\]]+)\]|(?P<r>[A-Za-z0-9\-]+)))?")
 
 
@@ -166,6 +167,8 @@ def parse_refs(text: str) -> list[Ref]:
     seen, out = set(), []
     for m in _REF_RE.finditer(text):
         t = m.group("type")
+        if t == "角色":                     # `@角色.X` 归一到 `人物`
+            t = "人物"
         name = m.group("b") or m.group("r") or ""
         if t != "主角" and not name:
             continue
