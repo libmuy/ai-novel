@@ -313,24 +313,34 @@ class PlanBeatRule(AuditRule):
         )]
 
     # --- PLAN_BEAT007：本卷核心法宝/功法须在节拍表摘要里追溯得到 ---
+    _RES_ID_RE = re.compile(r"RES-[A-Z]{2,4}-\d+")
+
     def _check_core_artifacts(self, rel, rows_under, all_beat_names, all_beat_text) -> List[Finding]:
         bad: List[str] = []
-        def _pred(s: str) -> bool:
+
+        def _sec_pred(s: str) -> bool:
             return ("核心法宝" in s or "核心功法" in s
                     or ("招牌" in s and ("法宝" in s or "功法" in s)))
-        for sec, rlineno, cells in rows_under(_pred):
-            for r in sorted(_refs_in(" ".join(cells))):
-                if r == "@主角":
-                    continue
-                if r not in all_beat_names and r not in all_beat_text:
-                    bad.append(f"{rel}:{rlineno}（本卷核心法宝/功法「{r}」，节拍表任何一章摘要都没 @引用 它）")
+
+        for sec, rlineno, cells in rows_under(_sec_pred):
+            # 只查「本卷招牌…」那一行（字段表首格含「招牌」）——「天花板」「分工」「配套」等说明行不查
+            if not cells or "招牌" not in cells[0]:
+                continue
+            blob = " ".join(cells[1:])
+            # 追溯标的：@物品/@资源 引用名（物品类招牌）＋ RES-ID（04_资源 条目不支持 @资源.[]，
+            # 功法/法宝一律纯文本＋卡号引用——见 06_卷大纲模板【本卷核心法宝/功法】）
+            tokens = {r for r in _refs_in(blob) if r != "@主角"}
+            tokens |= set(self._RES_ID_RE.findall(blob))
+            for tk in sorted(tokens):
+                if tk not in all_beat_names and tk not in all_beat_text:
+                    bad.append(f"{rel}:{rlineno}（本卷招牌法宝/功法「{tk}」，节拍表任何一章摘要都没提到——第几章挣到手 / 关键使用在哪一章？）")
         if not bad:
             return []
         return [Finding(
             severity=Severity.WARNING, rule=self.name, code="PLAN_BEAT007",
-            message=f"{len(bad)} 处：【本卷核心法宝/功法】列出的招牌物，在节拍表摘要里追溯不到",
+            message=f"{len(bad)} 处：【本卷核心法宝/功法】的招牌，在节拍表摘要里追溯不到",
             file=None,
-            suggestion="招牌法宝/功法的获得或关键使用那一章，其节拍表摘要须 @引用 此物（@资源.[名]/@物品.[名]）。",
+            suggestion="招牌法宝/功法的获得或关键使用那一章，其节拍表摘要须点到它（@物品.[名]，或 04_资源 条目用卡号 RES-xxx-NNN 纯文本）。",
             category="03_规划", locations=bad,
         )]
 

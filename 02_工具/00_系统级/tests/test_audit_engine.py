@@ -577,20 +577,25 @@ class TestAuditEngine(unittest.TestCase):
     # ---- plan_beat 007：本卷核心法宝/功法可追溯 ----
 
     def test_plan_beat_core_artifact_untraceable(self):
-        # 招牌功法《岩骨诀》列进【本卷核心法宝/功法】，但节拍表任何一章摘要都没 @引用
+        # 招牌功法（卡号 RES-GF-008）列进【本卷核心法宝/功法】，但节拍表任何一章摘要都没提到
         body = self._BEAT + (
-            "\n## 【本卷核心法宝/功法】\n\n| 字段 | 必填 | 内容 |\n|---|---|---|\n"
-            "| 本卷招牌法宝/功法 | (必) | @资源.[岩骨诀]（功法）——主角入道功法 |\n"
+            "\n## 【本卷核心法宝/功法】\n\n| 字段 | 内容 |\n|---|---|\n"
+            "| 本卷招牌功法 | **刻痕摹阵**（功法·阵道自录残本，RES-GF-008）——主角自录布阵法门 |\n"
+            "| 天花板 | 阵理不通、威力薄，卷2 撞墙 |\n"
         )
         found = self._run_plan_beat(body)
         self.assertIn("PLAN_BEAT007", found)
-        self.assertIn("岩骨诀", "".join(found["PLAN_BEAT007"].locations))
+        self.assertIn("RES-GF-008", "".join(found["PLAN_BEAT007"].locations))
 
     def test_plan_beat_core_artifact_ok(self):
-        # 招牌资源 @资源.[灵心草] 在第04章摘要里 @引用 了
-        body = self._BEAT + (
-            "\n## 【本卷核心法宝/功法】\n\n| 字段 | 必填 | 内容 |\n|---|---|---|\n"
-            "| 本卷招牌法宝/功法 | (必) | @资源.[灵心草]（法宝）——周莽相赠 |\n"
+        # 招牌功法的卡号 RES-GF-008 在第07章摘要里出现了
+        beat = self._BEAT + (
+            "| 第07章 | @主角 拓摹刻痕布出简易绊阵（刻痕摹阵 首次成阵，功法卡 RES-GF-008） | 00_通用写作规则 | 日常/铺垫 | 无钩 |\n"
+        )
+        body = beat + (
+            "\n## 【本卷核心法宝/功法】\n\n| 字段 | 内容 |\n|---|---|\n"
+            "| 本卷招牌功法 | **刻痕摹阵**（功法·阵道自录残本，RES-GF-008）——主角自录布阵法门 |\n"
+            "| 天花板 | 阵理不通、威力薄，卷2 撞墙 |\n"
         )
         found = self._run_plan_beat(body)
         self.assertNotIn("PLAN_BEAT007", found)
