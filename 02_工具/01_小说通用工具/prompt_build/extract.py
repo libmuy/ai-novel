@@ -256,6 +256,32 @@ def dy_block(core_dy_text: str, dy_id: str) -> str:
     return ""
 
 
+_DY_HEADING_RE = re.compile(r"^#{1,6}\s*.*?(DY-\d+)", re.M)
+
+
+def dy_ids_all(core_dy_text: str) -> list[str]:
+    """`05_核心道义.md`【二、道义条目详情】下全部已登记 DY 号，按文中出现顺序、去重。
+
+    用于节拍摘要没点名具体 DY 号时，给一份轻量索引兜底——否则细纲模板的
+    「本章落地道义」必填字段完全没有已登记道义可选，只能编或打问号。
+    """
+    out: list[str] = []
+    for m in _DY_HEADING_RE.finditer(core_dy_text):
+        did = m.group(1)
+        if did not in out:
+            out.append(did)
+    return out
+
+
+def dy_summary(core_dy_text: str, dy_id: str) -> tuple[str, str]:
+    """某条 DY 的 (道义类型, 道义表述) 一句话摘要，原文摘取、不改写。"""
+    body = dy_block(core_dy_text, dy_id)
+    type_m = re.search(r"\*\*道义类型\*\*[：:]\s*(.+)", body)
+    desc_m = re.search(r"\*\*道义表述\*\*[：:]\s*\n+(.+?)\n", body)
+    return (type_m.group(1).strip() if type_m else "",
+            desc_m.group(1).strip() if desc_m else "")
+
+
 def ledger_rows(text: str, ids: Iterable[str]) -> list[str]:
     """伏笔总纲 / 伏笔册里指定 ID 的登记行（原文照抄）。"""
     want = set(ids)

@@ -402,9 +402,15 @@ def _rv_dy_fh_outline(ctx, step, todos, cache):
 
 
 def _rv_dy_fh_beat(ctx, step, todos, cache):
+    # dy_fallback_index=True：细纲还没写，节拍摘要多半不会点名具体 DY 号（它只保证
+    # 主线事件，不保证价值冲突）；这时不能让「本章落地道义」这个必填字段完全没有
+    # 已登记道义可查（章0006 教训）——退化成一份轻量索引兜底，仍逐字摘取、不改写。
+    # `_rv_dy_fh_outline` 服务正文阶段，细纲已经拍板选了哪条（或明确「无」），
+    # 不需要、也不应该再兜底一份索引进去。
     beat = _beat(ctx, cache)
     tmp = Section("_")
-    _add_dy_and_fh(ctx, tmp, beat.get("摘要", "") if beat else "", todos=todos)
+    _add_dy_and_fh(ctx, tmp, beat.get("摘要", "") if beat else "", todos=todos,
+                   dy_fallback_index=True)
     return _blocks_of(tmp)
 
 
@@ -761,7 +767,8 @@ def _add_cast_cards(ctx: Ctx, sec: Section, source_text: str, from_beat: bool = 
         sec.add(f"出场对象卡 · {name}", text, rel(ctx.novel_dir, p))
 
 
-def _add_dy_and_fh(ctx: Ctx, sec: Section, source_text: str, todos: Optional[list] = None):
+def _add_dy_and_fh(ctx: Ctx, sec: Section, source_text: str, todos: Optional[list] = None,
+                    dy_fallback_index: bool = False):
     refs = extract.parse_refs(source_text)
     dy_ids = [r.name for r in refs if r.ref_type == "道义"]
     fh_ids = [r.name for r in refs if r.ref_type == "伏笔"]
@@ -780,6 +787,12 @@ def _add_dy_and_fh(ctx: Ctx, sec: Section, source_text: str, todos: Optional[lis
         if miss and todos is not None:
             todos.append(f"细纲点名了道义 {'、'.join(miss)}，但 `01_设定/05_核心道义.md` 里"
                          f"取不到对应小节（标题需含该 ID）——这几条未内联")
+    elif dy_fallback_index:
+        core = ctx.data("01_设定/05_核心道义.md")
+        body = _dy_index_block(core)
+        if body:
+            sec.add("本章道义索引（节拍未点名具体道义号，供选号）", body,
+                     "extract:01_设定/05_核心道义.md")
 
     if fh_ids:
         ledger = ctx.data("03_规划/00_伏笔总纲.md")
@@ -794,6 +807,30 @@ def _add_dy_and_fh(ctx: Ctx, sec: Section, source_text: str, todos: Optional[lis
         elif todos is not None:
             todos.append(f"细纲点名了伏笔 {'、'.join(fh_ids)}，但伏笔总纲 / 卷伏笔册里"
                          f"没有一条对应登记行——伏笔号写错？总纲漏登记？")
+
+
+def _dy_index_block(core_dy_text: str) -> str:
+    """全书已登记道义的轻量索引（ID/类型/一句话表述，原文摘取、不改写）。
+
+    节拍摘要不点名具体 DY 号是常态（它只保证主线事件，价值冲突是否落地、落哪条
+    由细纲判断）——不给兜底就等于让「本章落地道义」这个必填字段无据可查，云端
+    要么编号、要么瞎猜（章0006 教训）。索引只给一句话，不整段内联六条全文——
+    真要选中某条，其【禁忌写法】【校验问题】等仍以 `01_设定/05_核心道义.md`
+    原文为准，细纲阶段先定位号即可。
+    """
+    ids = extract.dy_ids_all(core_dy_text)
+    if not ids:
+        return ""
+    rows = ["| 道义ID | 道义类型 | 道义表述 |", "|---|---|---|"]
+    for did in ids:
+        dy_type, desc = extract.dy_summary(core_dy_text, did)
+        rows.append(f"| {did} | {dy_type} | {desc} |")
+    return ("本章节拍摘要未点名具体道义号——以下是全书已登记道义的索引（原文摘取）。"
+            "本章若确有价值冲突落地，从表中选**一条**填入「本章落地道义」，"
+            "**禁止使用表外编号、禁止自造新号**；选中条目的完整【禁忌写法】【校验问题】"
+            "以 `01_设定/05_核心道义.md` 原文为准。普通章节无需强制出现显性道义"
+            "（见该文件【四、道义密度控制】），拿不准就写「本章不强制落地具体道义号」。\n\n"
+            + "\n".join(rows) + "\n")
 
 
 def _fh_registry_block(fh_ids: list[str], ledger_rows: list[str],

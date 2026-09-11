@@ -350,6 +350,28 @@ class TestExtractDyBlock(unittest.TestCase):
         self.assertEqual(extract.dy_block(src, "DY-001"), "")
 
 
+class TestExtractDyIndex(unittest.TestCase):
+    """extract.dy_ids_all / dy_summary —— 节拍摘要没点名具体 DY 号时的兜底索引取材。"""
+
+    SRC = ("### 道义条目 · DY-001\n**道义类型**：取舍类\n\n"
+           "**道义表述**：\n舍与得，账面好算，心里难算。\n\n**核心含义**：\n略。\n\n"
+           "### 道义条目 · DY-002\n**道义类型**：善恶类\n\n"
+           "**道义表述**：\n规矩也会杀人。\n\n**核心含义**：\n略。\n")
+
+    def test_dy_ids_all_in_order_no_dup(self):
+        self.assertEqual(extract.dy_ids_all(self.SRC), ["DY-001", "DY-002"])
+
+    def test_dy_ids_all_empty_source(self):
+        self.assertEqual(extract.dy_ids_all(""), [])
+
+    def test_dy_summary_extracts_type_and_desc(self):
+        self.assertEqual(extract.dy_summary(self.SRC, "DY-001"),
+                          ("取舍类", "舍与得，账面好算，心里难算。"))
+
+    def test_dy_summary_missing_id_returns_blanks(self):
+        self.assertEqual(extract.dy_summary(self.SRC, "DY-999"), ("", ""))
+
+
 class TestExtractLedgerRows(unittest.TestCase):
     """extract.ledger_rows —— 首列必须是裸 ID；加粗即漏。"""
 
@@ -549,7 +571,10 @@ class TestAssemble(unittest.TestCase):
                "## 【世界基本法则】\n| 规则ID | 名称 | 状态 | 内容 |\n|---|---|---|---|\n"
                "| WR-001 | 规则1 | 硬 | 内容1 |\n\n"
                "## 信息与认知法则\n认知规则。\n")
-        _write(novel_dir / "01_设定/05_核心道义.md", "## DY-001 规则\n道义内容。\n")
+        _write(novel_dir / "01_设定/05_核心道义.md",
+               "### 道义条目 · DY-001\n**道义类型**：取舍类\n\n"
+               "**道义表述**：\n舍与得，账面好算，心里难算。\n\n"
+               "**核心含义**：\n取舍要亲手承担。\n")
 
         # 创建大纲
         outline_text = """# 第一章细纲
@@ -740,6 +765,79 @@ class TestEventTemplatesFromBeat(unittest.TestCase):
 
     def test_none_beat_yields_nothing(self):
         self.assertEqual(self._paths(None), [])
+
+
+class TestDyIndexBlock(unittest.TestCase):
+    """assemble._dy_index_block —— 节拍摘要没点名 DY 号时的兜底索引（章0006 教训）。
+
+    没有这份兜底，细纲模板「本章落地道义」必填字段会完全无据可查——
+    云端要么编号、要么打问号；这里只验证索引本身取材正确，不改写。
+    """
+
+    SRC = ("### 道义条目 · DY-001\n**道义类型**：取舍类\n\n"
+           "**道义表述**：\n舍与得，账面好算，心里难算。\n\n**核心含义**：\n略。\n\n"
+           "### 道义条目 · DY-002\n**道义类型**：善恶类\n\n"
+           "**道义表述**：\n规矩也会杀人。\n\n**核心含义**：\n略。\n")
+
+    def test_lists_every_registered_dy(self):
+        out = assemble._dy_index_block(self.SRC)
+        self.assertIn("DY-001", out)
+        self.assertIn("DY-002", out)
+        self.assertIn("舍与得，账面好算，心里难算。", out)
+        self.assertIn("规矩也会杀人。", out)
+
+    def test_says_no_forging_new_ids(self):
+        out = assemble._dy_index_block(self.SRC)
+        self.assertIn("禁止使用表外编号", out)
+        self.assertIn("禁止自造新号", out)
+
+    def test_empty_registry_yields_empty_block(self):
+        self.assertEqual(assemble._dy_index_block(""), "")
+
+
+class TestAddDyAndFhFallback(unittest.TestCase):
+    """assemble._add_dy_and_fh 的 dy_fallback_index 开关。
+
+    只有细纲阶段（节拍摘要没点名 DY 号）该兜底；正文阶段细纲已经拍板选了哪条
+    （或明确「无」），不该再塞一份索引进去（`_rv_dy_fh_outline` 不传该参数）。
+    """
+
+    def _ctx(self, dy_text):
+        # layout=None：这几个用例都不点名伏笔，走不到 `_add_dy_and_fh` 里用 ctx.layout
+        # 的那条分支（fh_ids 非空才碰 ctx.layout.volume_foreshadow）。
+        novel_dir = Path(tempfile.mkdtemp())
+        (novel_dir / "01_设定").mkdir(parents=True, exist_ok=True)
+        (novel_dir / "01_设定/05_核心道义.md").write_text(dy_text, encoding="utf-8")
+        return assemble.Ctx(novel_dir=novel_dir, repo_root=novel_dir,
+                             layout=None, novel_name="小说")
+
+    DY_TEXT = ("### 道义条目 · DY-001\n**道义类型**：取舍类\n\n"
+               "**道义表述**：\n舍与得，账面好算，心里难算。\n\n**核心含义**：\n略。\n")
+
+    def test_fallback_adds_index_when_nothing_named(self):
+        ctx = self._ctx(self.DY_TEXT)
+        sec = assemble.Section("_")
+        assemble._add_dy_and_fh(ctx, sec, "主角醒来，没有点名任何道义或伏笔。",
+                                 dy_fallback_index=True)
+        bodies = "".join(b.body for b in sec.blocks)
+        self.assertIn("DY-001", bodies)
+        self.assertIn("道义索引", "".join(b.title for b in sec.blocks))
+
+    def test_no_fallback_by_default(self):
+        """`_rv_dy_fh_outline`（正文阶段）不传 `dy_fallback_index`——默认关闭。"""
+        ctx = self._ctx(self.DY_TEXT)
+        sec = assemble.Section("_")
+        assemble._add_dy_and_fh(ctx, sec, "主角醒来，没有点名任何道义或伏笔。")
+        self.assertEqual(sec.blocks, [])
+
+    def test_named_dy_skips_fallback(self):
+        """节拍摘要已经点名了具体 DY 号时，不该再额外塞一份索引凑数。"""
+        ctx = self._ctx(self.DY_TEXT)
+        sec = assemble.Section("_")
+        assemble._add_dy_and_fh(ctx, sec, "@道义.DY-001 落地。", dy_fallback_index=True)
+        titles = [b.title for b in sec.blocks]
+        self.assertTrue(any("DY-001" in t for t in titles))
+        self.assertFalse(any("索引" in t for t in titles))
 
 
 class TestFhRegistryBlock(unittest.TestCase):
@@ -1061,8 +1159,18 @@ class TestManifestGolden(TestAssemble):
     #      也会触发这句站不住脚的指令；现在改为同时要求 `_event_templates_from_beat` 非空，
     #      且改成动态编号（避免中间某条被跳过时编号出现空洞）。OUTLINE 哈希因此变
     #      （fixture 走 outline 路径，MANUSCRIPT 不经过 `_outline_task`，哈希不变）。
+    # 2026-09-11（章0006 教训之二：道义无据可查）：节拍摘要没点名具体 DY 号是常态
+    #   （它只保证主线事件，价值冲突是否落地由细纲判断），但旧实现此时干脆不内联
+    #   任何道义数据——细纲模板「本章落地道义」必填字段完全没有已登记道义可选，
+    #   云端要么编号要么打问号。`_add_dy_and_fh` 新增 `dy_fallback_index` 参数，
+    #   仅细纲阶段（`_rv_dy_fh_beat`）没点名 DY 时兜底一份轻量索引（ID/类型/一句话
+    #   表述，原文摘取，见 `_dy_index_block`）；正文阶段（`_rv_dy_fh_outline`）细纲
+    #   已经拍板，不兜底。fixture 的 `01_设定/05_核心道义.md` 顺手改成贴近真实文件的
+    #   `**道义类型**`/`**道义表述**` 格式（原先的 `## DY-001 规则` 太失真，索引抽不出
+    #   有意义的字段）。MANUSCRIPT 不受影响（fixture 细纲【道义与感悟】写「无」，
+    #   不触发 `_rv_dy_fh_outline` 的道义分支，也不经过 `dy_fallback_index`）。
     GOLDEN_MANUSCRIPT = "c915b798afafa87c81792de177ae90b7b7945cabf0c412bc9d445f29c64c29e7"
-    GOLDEN_OUTLINE = "948b996797e2a79723734bd70e6289bab71b008a4acadb1cf1e1e4f0f1687336"
+    GOLDEN_OUTLINE = "eae3fe7bc0bee240278a7aa2ac650099f05f843b86f797c28ce2479f4f318343"
 
     def _hash(self, text):
         import hashlib
