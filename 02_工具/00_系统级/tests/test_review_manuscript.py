@@ -214,6 +214,25 @@ class TestResolveTargetsChapterDir(unittest.TestCase):
             self.assertTrue(str(rec).endswith("03_章0001/02_状态/02_正文校验记录.md"))
             self.assertIn("细纲", ref)
             self.assertIn("世界基本法则", ref)
+            self.assertNotIn("本章开篇状态", ref)  # 没建这个文件时不该假装有
+
+    def test_manuscript_mode_includes_opener_when_present(self):
+        """`00_开篇状态.md` 存在时要作为参照喂给冷读——它是前几章正文折叠出的
+        跨章事实浓缩版，没有它评审器查不出"云端模型编了个不存在的跨章因果"这类幻觉
+        （ch0005"你替老刘家那小子扛了"的教训）。"""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "00_小说"
+            root.mkdir()
+            self._mk_novel(root)
+            opener = (root / "05_工作区/03_第01部/03_卷01/03_章0001/02_状态/00_开篇状态.md")
+            opener.write_text("# 开篇状态\n关系.苏砚&马铁秤 概述：苏砚拒绝指认周莽。\n", encoding="utf-8")
+
+            class A:
+                chapter_dir = str(root / "05_工作区/03_第01部/03_卷01/03_章0001")
+                manuscript = novel_dir = mode = record = None
+            _, _, _, ref, _ = R._resolve_targets(A())
+            self.assertIn("本章开篇状态", ref)
+            self.assertEqual(ref["本章开篇状态"], opener)
 
     def test_outline_mode(self):
         with tempfile.TemporaryDirectory() as td:
