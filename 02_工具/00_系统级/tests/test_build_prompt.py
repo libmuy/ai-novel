@@ -1024,7 +1024,7 @@ class TestManifestGolden(TestAssemble):
     #   「本表是本章出场对象的权威，允许多于卷大纲节拍表——卷纲摘要只点主干，次要对象本层按需补齐」
     #   ——只内联进 OUTLINE。
     GOLDEN_MANUSCRIPT = "c915b798afafa87c81792de177ae90b7b7945cabf0c412bc9d445f29c64c29e7"
-    GOLDEN_OUTLINE = "dc3bbfb5f7a791abb0cefd7ecc00d233975d39b5d348f65a813560b718180b95"
+    GOLDEN_OUTLINE = "8cd2616b23a02168f72bf4f611325311bb17109ca45ccc0b970725543b8e8e55"
 
     def _hash(self, text):
         import hashlib
