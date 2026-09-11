@@ -714,6 +714,34 @@ class TestEventTemplates(unittest.TestCase):
         self.assertEqual(self._paths(outline), ["02_卡片模板/08_战斗结算模板.md"])
 
 
+class TestEventTemplatesFromBeat(unittest.TestCase):
+    """assemble._event_templates_from_beat —— 节拍表「核心事件类型」的复合标签不得被子串误判。
+
+    章0006 教训：必用模板=00_通用写作规则、核心事件类型=冲突/谈判，却被裸「冲突」
+    子串命中「战斗结算模板」的键误拉进来；「危机/冲突」同理会被误伤。
+    """
+
+    _BT = "02_卡片模板/08_战斗结算模板.md"
+
+    def _paths(self, beat):
+        return [p for _, p in assemble._event_templates_from_beat(beat)]
+
+    def test_conflict_negotiation_does_not_trigger_combat_template(self):
+        beat = {"必用模板": "00_通用写作规则", "核心事件类型": "冲突/谈判"}
+        self.assertEqual(self._paths(beat), [])
+
+    def test_crisis_conflict_does_not_trigger_combat_template(self):
+        beat = {"必用模板": "00_通用写作规则", "核心事件类型": "危机/冲突"}
+        self.assertEqual(self._paths(beat), [])
+
+    def test_actual_combat_still_triggers_combat_template(self):
+        beat = {"必用模板": "08_战斗结算模板", "核心事件类型": "冲突/战斗"}
+        self.assertEqual(self._paths(beat), [self._BT])
+
+    def test_none_beat_yields_nothing(self):
+        self.assertEqual(self._paths(None), [])
+
+
 class TestFhRegistryBlock(unittest.TestCase):
     """assemble._fh_registry_block —— 总纲 / 卷册的异构登记行按来源分组，不裸拼成坏表。"""
 
@@ -1023,8 +1051,18 @@ class TestManifestGolden(TestAssemble):
     # 2026-09-10（卷大纲精简出场对象 · 每卷招牌法宝功法）：`07_单章细纲模板` 出场对象注加
     #   「本表是本章出场对象的权威，允许多于卷大纲节拍表——卷纲摘要只点主干，次要对象本层按需补齐」
     #   ——只内联进 OUTLINE。
+    # 2026-09-11（章0006 教训：事件卡模板误触发 + 任务项自称对不上）：
+    #   ① `_EVENT_TPL` 删掉裸「冲突」键——它会把「冲突/谈判」「危机/冲突」误判成「冲突/战斗」，
+    #      错拉战斗结算模板（章0006 必用模板=00_通用写作规则、核心事件类型=冲突/谈判，
+    #      却被内联了一整份战斗结算模板）；不影响 MANUSCRIPT/OUTLINE 两份 fixture 的哈希
+    #      （fixture 核心事件类型是占位符「—」，本就不含「冲突」）。
+    #   ② `_outline_task` 第 6 条「须按【必读模板】对应的事件卡模板补齐要素区块」原先只要
+    #      `核心事件类型` 非空就出现，与是否真的拉了事件卡模板脱钩——fixture 的占位符「—」
+    #      也会触发这句站不住脚的指令；现在改为同时要求 `_event_templates_from_beat` 非空，
+    #      且改成动态编号（避免中间某条被跳过时编号出现空洞）。OUTLINE 哈希因此变
+    #      （fixture 走 outline 路径，MANUSCRIPT 不经过 `_outline_task`，哈希不变）。
     GOLDEN_MANUSCRIPT = "c915b798afafa87c81792de177ae90b7b7945cabf0c412bc9d445f29c64c29e7"
-    GOLDEN_OUTLINE = "8cd2616b23a02168f72bf4f611325311bb17109ca45ccc0b970725543b8e8e55"
+    GOLDEN_OUTLINE = "948b996797e2a79723734bd70e6289bab71b008a4acadb1cf1e1e4f0f1687336"
 
     def _hash(self, text):
         import hashlib
