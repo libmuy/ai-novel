@@ -802,14 +802,21 @@ class TestAddDyAndFhFallback(unittest.TestCase):
     （或明确「无」），不该再塞一份索引进去（`_rv_dy_fh_outline` 不传该参数）。
     """
 
-    def _ctx(self, dy_text):
-        # layout=None：这几个用例都不点名伏笔，走不到 `_add_dy_and_fh` 里用 ctx.layout
-        # 的那条分支（fh_ids 非空才碰 ctx.layout.volume_foreshadow）。
+    def _ctx(self, dy_text, fh_text=None):
+        # layout=None：不点名伏笔的用例走不到 `_add_dy_and_fh` 里用 ctx.layout 的
+        # 那条分支（fh_ids 非空、或 fh_fallback_index 时才碰
+        # ctx.layout.volume_foreshadow）；传了 fh_text 才搭一个只有该属性的假 layout。
+        import types
         novel_dir = Path(tempfile.mkdtemp())
         (novel_dir / "01_设定").mkdir(parents=True, exist_ok=True)
         (novel_dir / "01_设定/05_核心道义.md").write_text(dy_text, encoding="utf-8")
+        layout = None
+        if fh_text is not None:
+            fh_path = novel_dir / "03_规划/01_第01部/01_卷01/00_伏笔册_卷01.md"
+            _write(fh_path, fh_text)
+            layout = types.SimpleNamespace(volume_foreshadow=fh_path)
         return assemble.Ctx(novel_dir=novel_dir, repo_root=novel_dir,
-                             layout=None, novel_name="小说")
+                             layout=layout, novel_name="小说")
 
     DY_TEXT = ("### 道义条目 · DY-001\n**道义类型**：取舍类\n\n"
                "**道义表述**：\n舍与得，账面好算，心里难算。\n\n**核心含义**：\n略。\n")
@@ -838,6 +845,152 @@ class TestAddDyAndFhFallback(unittest.TestCase):
         titles = [b.title for b in sec.blocks]
         self.assertTrue(any("DY-001" in t for t in titles))
         self.assertFalse(any("索引" in t for t in titles))
+
+    FH_TEXT = ("## 1. 本卷新埋伏笔\n\n"
+               "| 伏笔ID | 伏笔名称 | 伏笔内容描述 | 状态 |\n| :--- | :--- | :--- | :--- |\n"
+               "| FH-067 | 弃矿沟古玉共鸣 | 古玉首次发热 | 活跃(已埋设) |\n")
+
+    def test_fh_fallback_adds_index_when_nothing_named(self):
+        ctx = self._ctx(self.DY_TEXT, fh_text=self.FH_TEXT)
+        sec = assemble.Section("_")
+        assemble._add_dy_and_fh(ctx, sec, "主角醒来，没有点名任何道义或伏笔。",
+                                 fh_fallback_index=True)
+        bodies = "".join(b.body for b in sec.blocks)
+        self.assertIn("FH-067", bodies)
+        self.assertIn("伏笔索引", "".join(b.title for b in sec.blocks))
+
+    def test_fh_no_fallback_by_default(self):
+        ctx = self._ctx(self.DY_TEXT, fh_text=self.FH_TEXT)
+        sec = assemble.Section("_")
+        assemble._add_dy_and_fh(ctx, sec, "主角醒来，没有点名任何道义或伏笔。")
+        self.assertEqual(sec.blocks, [])
+
+    def test_named_fh_skips_fallback(self):
+        """节拍摘要已经点名了具体 FH 号时，不该再额外塞一份索引凑数。"""
+        ctx = self._ctx(self.DY_TEXT, fh_text=self.FH_TEXT)
+        sec = assemble.Section("_")
+        assemble._add_dy_and_fh(ctx, sec, "@伏笔.FH-067 推进。", fh_fallback_index=True)
+        titles = [b.title for b in sec.blocks]
+        self.assertTrue(any("FH-067" in t for t in titles))
+        self.assertFalse(any("索引" in t for t in titles))
+
+
+class TestExtractFhIndexAll(unittest.TestCase):
+    """extract.fh_index_all —— 本卷伏笔册【1. 本卷新埋伏笔】表的兜底索引取材。"""
+
+    SRC = ("## 1. 本卷新埋伏笔\n\n"
+           "| 伏笔ID | 伏笔名称 | 跨度 | 埋设位置 | 拟回收卷/章 | 伏笔内容描述 | 关联对象 | 状态 |\n"
+           "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n"
+           "| FH-067 | 弃矿沟古玉共鸣 | 整书 | 卷01章0001 | 卷02 | 古玉首次发热 | @主角 | 活跃(已埋设) |\n"
+           "| FH-069 | 父亲死因 | 整书 | 卷01章0005 | 卷03~卷04 | 母亲病中暗示 | @主角 | 活跃(已埋设) |\n"
+           "\n## 2. 本卷暗示/推进伏笔\n\n"
+           "| 伏笔ID | 伏笔名称 |\n|---|---|\n| FH-068 | 活矿邪法 |\n")
+
+    def test_extracts_only_first_table(self):
+        rows = extract.fh_index_all(self.SRC)
+        ids = [r["伏笔ID"] for r in rows]
+        self.assertEqual(ids, ["FH-067", "FH-069"])
+
+    def test_row_fields_by_header_name(self):
+        rows = extract.fh_index_all(self.SRC)
+        self.assertEqual(rows[0]["伏笔名称"], "弃矿沟古玉共鸣")
+        self.assertEqual(rows[0]["伏笔内容描述"], "古玉首次发热")
+        self.assertEqual(rows[0]["状态"], "活跃(已埋设)")
+
+    def test_no_section_returns_empty(self):
+        self.assertEqual(extract.fh_index_all("没有这个小节。"), [])
+
+
+class TestFhIndexBlock(unittest.TestCase):
+    """assemble._fh_index_block —— 节拍摘要没点名 FH 号时的兜底索引（章0006 教训）。"""
+
+    SRC = ("## 1. 本卷新埋伏笔\n\n"
+           "| 伏笔ID | 伏笔名称 | 伏笔内容描述 | 状态 |\n| :--- | :--- | :--- | :--- |\n"
+           "| FH-067 | 弃矿沟古玉共鸣 | 古玉首次发热 | 活跃(已埋设) |\n")
+
+    def test_lists_registered_fh_and_forbids_new_ids(self):
+        out = assemble._fh_index_block(self.SRC)
+        self.assertIn("FH-067", out)
+        self.assertIn("古玉首次发热", out)
+        self.assertIn("禁止现编新号", out)
+
+    def test_empty_ledger_yields_empty_block(self):
+        self.assertEqual(assemble._fh_index_block(""), "")
+
+
+class TestVolumeRelationsPlan(unittest.TestCase):
+    """assemble._rv_volume_relations_plan —— 卷纲【角色与关系】【卷末状态】全量内联。
+
+    章0006 教训：这两块此前完全没有内联通道——铁妞、马铁秤已经设计好的关系弧线
+    阶段云端一次都看不到。任务11 必读数据本就包含它们（见路由表）。
+    """
+
+    PLAN = """# 卷01大纲
+
+## 【角色与关系】
+
+### 本卷新出场配角
+
+| 角色 | 关联卡 | 职能/定位 |
+|---|---|---|
+| @人物.[铁妞] | `07_人物_铁妞.md` | 青梅竹马 |
+
+### 本卷退场配角
+
+| 角色 | 退场方式 |
+|---|---|
+| @人物.[马铁秤] | 被处死 |
+
+### 本卷关系变化
+
+| 关系双方 | 弧线 |
+|---|---|
+| @主角 ↔ @人物.[马铁秤] | 压迫者 → 被算计 → 弃子 |
+
+## 【卷末状态】
+
+### 本卷结束时主角状态
+
+- 资源：约 800 下品灵石
+
+### 卷末钩子
+
+老屠冷笑一句。
+
+### 下一卷预告方向
+
+去天璇圣城。
+"""
+
+    def _ctx(self):
+        from prompt_build import manifest
+        novel_dir = Path(tempfile.mkdtemp())
+        _write(novel_dir / "03_规划/01_第01部/01_卷01/规划_卷01.md", self.PLAN)
+        layout = L.resolve(novel_dir, part=1, volume=1, chapter=1)
+        ctx = assemble.Ctx(novel_dir=novel_dir, repo_root=novel_dir,
+                            layout=layout, novel_name="小说")
+        step = manifest.Step(into="已有数据", source="resolver:volume_relations_plan",
+                             title="本卷角色弧线与卷末状态（卷大纲子表）")
+        return ctx, step
+
+    def test_inlines_all_six_subsections(self):
+        ctx, step = self._ctx()
+        out = assemble._rv_volume_relations_plan(ctx, step, [], {})
+        self.assertEqual(len(out), 1)
+        _, body, _ = out[0]
+        for needle in ("铁妞", "马铁秤", "压迫者 → 被算计 → 弃子",
+                       "约 800 下品灵石", "老屠冷笑", "天璇圣城"):
+            self.assertIn(needle, body)
+
+    def test_empty_plan_yields_nothing(self):
+        novel_dir = Path(tempfile.mkdtemp())
+        _write(novel_dir / "03_规划/01_第01部/01_卷01/规划_卷01.md", "# 卷01大纲\n无相关子表。\n")
+        layout = L.resolve(novel_dir, part=1, volume=1, chapter=1)
+        ctx = assemble.Ctx(novel_dir=novel_dir, repo_root=novel_dir,
+                            layout=layout, novel_name="小说")
+        from prompt_build import manifest
+        step = manifest.Step(into="已有数据", source="resolver:volume_relations_plan")
+        self.assertEqual(assemble._rv_volume_relations_plan(ctx, step, [], {}), [])
 
 
 class TestFhRegistryBlock(unittest.TestCase):

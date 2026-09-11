@@ -92,6 +92,14 @@ note = "卷大纲【资源与伏笔规划】的资源/财务子表——细纲�
 
 [[task."细纲".step]]
 into = "已有数据"
+source = "resolver:volume_relations_plan"
+title = "本卷角色弧线与卷末状态（卷大纲子表）"
+mode = "resolver"
+role = "data"
+note = "卷大纲【角色与关系】【卷末状态】——不按章过滤、全量内联；没有这块，本章涉及的配角/关系已设计好的演变阶段云端一次都看不到（章0006教训：铁妞/马铁秤的弧线阶段）"
+
+[[task."细纲".step]]
+into = "已有数据"
 source = "layout:protagonist"
 title = "主角档案"
 mode = "whole"

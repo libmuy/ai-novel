@@ -292,6 +292,35 @@ def ledger_rows(text: str, ids: Iterable[str]) -> list[str]:
     return out
 
 
+def fh_index_all(vol_ledger_text: str) -> list[dict]:
+    """本卷伏笔册【1. 本卷新埋伏笔】表的轻量索引，按表头动态取名、原文摘取、去重。
+
+    用于节拍摘要没点名具体 FH 号时兜底——否则「伏笔的埋设/推进/回收只能用已登记
+    编号」这条硬约束无从遵守，云端要么现编号、要么打问号（同 DY 兜底，见
+    `assemble._dy_index_block`）。只取本卷（不取全书总纲）——总纲跨全部部/卷，
+    把还没写到的未来伏笔摊给当前章节只会诱导提前剧透、且与「未知规则须保持
+    未知」的原则冲突。
+    """
+    section = read_section(vol_ledger_text, "1. 本卷新埋伏笔")
+    if not section:
+        return []
+    rows = table_rows(section)
+    if not rows:
+        return []
+    header = rows[0]
+    out: list[dict] = []
+    seen: set[str] = set()
+    for cells in rows[1:]:
+        if not cells or not re.match(r"^FH-\d+$", cells[0]):
+            continue
+        if cells[0] in seen:
+            continue
+        seen.add(cells[0])
+        out.append({(header[i] if i < len(header) else f"列{i}"): v
+                    for i, v in enumerate(cells)})
+    return out
+
+
 def field_value(text: str, field: str) -> str:
     """`| <field> | … |` 那一行的**值列**。
 

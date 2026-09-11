@@ -402,15 +402,16 @@ def _rv_dy_fh_outline(ctx, step, todos, cache):
 
 
 def _rv_dy_fh_beat(ctx, step, todos, cache):
-    # dy_fallback_index=True：细纲还没写，节拍摘要多半不会点名具体 DY 号（它只保证
-    # 主线事件，不保证价值冲突）；这时不能让「本章落地道义」这个必填字段完全没有
-    # 已登记道义可查（章0006 教训）——退化成一份轻量索引兜底，仍逐字摘取、不改写。
+    # dy_fallback_index / fh_fallback_index=True：细纲还没写，节拍摘要多半不会点名
+    # 具体 DY/FH 号（它只保证主线事件，不保证价值冲突/伏笔落在哪条）；这时不能让
+    # 「本章落地道义」这个必填字段、以及「伏笔只能用已登记编号」这条硬约束完全没
+    # 有已登记条目可查（章0006 教训）——退化成一份轻量索引兜底，仍逐字摘取、不改写。
     # `_rv_dy_fh_outline` 服务正文阶段，细纲已经拍板选了哪条（或明确「无」），
     # 不需要、也不应该再兜底一份索引进去。
     beat = _beat(ctx, cache)
     tmp = Section("_")
     _add_dy_and_fh(ctx, tmp, beat.get("摘要", "") if beat else "", todos=todos,
-                   dy_fallback_index=True)
+                   dy_fallback_index=True, fh_fallback_index=True)
     return _blocks_of(tmp)
 
 
@@ -503,6 +504,35 @@ def _rv_volume_resource_plan(ctx, step, todos, cache):
              f"extract:{rel(ctx.novel_dir, ctx.layout.volume_plan)}")]
 
 
+def _rv_volume_relations_plan(ctx, step, todos, cache):
+    """卷大纲【角色与关系】【卷末状态】子表（全卷通用，不按章过滤）。
+
+    任务11 必读数据本就包含这两块（见 `00_云端提示词生成器.md` 路由表），但此前
+    完全没有内联通道——章0006 教训：铁妞、马铁秤在卷纲里已经设计好的关系弧线
+    阶段（"当众克扣放话→揭穿账目→处死"）云端一次都看不到，没法判断本章这场
+    谈判该落在弧线哪一步。两块加起来一卷也就几十行（不按章节裁剪，卷大纲本就
+    禁止这两块带「章节」列，见 `00_系统架构规范.md` §二·A），全量内联即可，
+    不必再按本章出场对象过滤——过滤后反而可能漏掉「本章该埋而没埋」的伏笔式
+    人物动向。
+    """
+    plan = ctx.read_path(ctx.layout.volume_plan)
+    body = extract.read_sections(plan, [
+        "本卷新出场配角",
+        "本卷退场配角",
+        "本卷关系变化",
+        "本卷结束时主角状态",
+        "卷末钩子",
+        "下一卷预告方向",
+    ])
+    if not body.strip():
+        return []
+    lead = ("卷大纲【角色与关系】【卷末状态】子表（全卷通用，各表不按章节裁剪）。"
+            "本章涉及的配角/关系若已在此登记了演变阶段，本章须落在该阶段合理的"
+            "一步上，不得跳过或倒退；未登记的一次性配角不受此表约束。\n\n")
+    return [(step.title, lead + body,
+             f"extract:{rel(ctx.novel_dir, ctx.layout.volume_plan)}")]
+
+
 _MAIN_CULTIVATION_RE = re.compile(r"主修[：:]\s*([^\（(，,、；;。\n/]+)")
 
 
@@ -563,6 +593,7 @@ _RESOLVERS = {
     "sliding_window": _rv_sliding_window,
     "opener_state_outline": _rv_opener_state_outline,
     "volume_resource_plan": _rv_volume_resource_plan,
+    "volume_relations_plan": _rv_volume_relations_plan,
     "cultivation_breakthrough_outline": _rv_cultivation_breakthrough_outline,
 }
 
@@ -768,7 +799,7 @@ def _add_cast_cards(ctx: Ctx, sec: Section, source_text: str, from_beat: bool = 
 
 
 def _add_dy_and_fh(ctx: Ctx, sec: Section, source_text: str, todos: Optional[list] = None,
-                    dy_fallback_index: bool = False):
+                    dy_fallback_index: bool = False, fh_fallback_index: bool = False):
     refs = extract.parse_refs(source_text)
     dy_ids = [r.name for r in refs if r.ref_type == "道义"]
     fh_ids = [r.name for r in refs if r.ref_type == "伏笔"]
@@ -807,6 +838,12 @@ def _add_dy_and_fh(ctx: Ctx, sec: Section, source_text: str, todos: Optional[lis
         elif todos is not None:
             todos.append(f"细纲点名了伏笔 {'、'.join(fh_ids)}，但伏笔总纲 / 卷伏笔册里"
                          f"没有一条对应登记行——伏笔号写错？总纲漏登记？")
+    elif fh_fallback_index:
+        vol = ctx.read_path(ctx.layout.volume_foreshadow)
+        body = _fh_index_block(vol)
+        if body:
+            sec.add("本章伏笔索引（节拍未点名具体伏笔号，供选号）", body,
+                    rel(ctx.novel_dir, ctx.layout.volume_foreshadow))
 
 
 def _dy_index_block(core_dy_text: str) -> str:
@@ -831,6 +868,28 @@ def _dy_index_block(core_dy_text: str) -> str:
             "以 `01_设定/05_核心道义.md` 原文为准。普通章节无需强制出现显性道义"
             "（见该文件【四、道义密度控制】），拿不准就写「本章不强制落地具体道义号」。\n\n"
             + "\n".join(rows) + "\n")
+
+
+def _fh_index_block(vol_ledger_text: str) -> str:
+    """本卷伏笔册已登记新埋伏笔的轻量索引（ID/名称/一句话内容/状态，原文摘取）。
+
+    节拍摘要不点名具体 FH 号是常态——不给兜底，「伏笔的埋设/推进/回收只能用
+    已登记编号，禁止现编」这条硬约束就没有编号可查（同 DY 兜底，见
+    `_dy_index_block`）。只取**本卷**伏笔册，不取全书 `00_伏笔总纲.md`——总纲
+    跨全部部/卷，把未来部/卷才揭示的伏笔摊给当前章节只会诱导提前剧透。
+    """
+    rows = extract.fh_index_all(vol_ledger_text)
+    if not rows:
+        return ""
+    lines = ["| 伏笔ID | 名称 | 一句话内容 | 状态 |", "|---|---|---|---|"]
+    for r in rows:
+        lines.append(f"| {r.get('伏笔ID', '')} | {r.get('伏笔名称', '')} | "
+                     f"{r.get('伏笔内容描述', '')} | {r.get('状态', '')} |")
+    return ("本章节拍摘要未点名具体伏笔号——以下是本卷伏笔册已登记的新埋伏笔索引"
+            "（原文摘取）。本章若确有伏笔埋设 / 推进 / 回收，从表中选**已登记编号**，"
+            "**禁止现编新号、禁止使用表外编号**；完整埋设位置与回收计划以"
+            "`00_伏笔总纲.md` / 本卷伏笔册原文为准。多数普通章节不涉及伏笔，"
+            "写「本章不涉及伏笔」即可。\n\n" + "\n".join(lines) + "\n")
 
 
 def _fh_registry_block(fh_ids: list[str], ledger_rows: list[str],

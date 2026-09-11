@@ -23,7 +23,7 @@ RESOLVERS = {
     "wr_hard_manuscript", "wr_hard_outline", "dy_fh_outline", "dy_fh_beat",
     "task_directive", "scene_budget", "opening_contract", "beat_block",
     "sliding_window", "opener_state_outline",
-    "volume_resource_plan", "cultivation_breakthrough_outline",
+    "volume_resource_plan", "volume_relations_plan", "cultivation_breakthrough_outline",
 }
 AUTHORED = {
     "role_manuscript", "role_outline", "no_invent", "output_format_manuscript",
