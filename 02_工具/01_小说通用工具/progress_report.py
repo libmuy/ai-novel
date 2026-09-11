@@ -18,9 +18,15 @@
 用法
 ----
     progress_report.py <小说目录> [--write] [--format text|json]
+    progress_report.py <小说目录> --preflight 细纲 <章号>
 
-    --write   把派生视图写到 05_工作区/02_状态/05_进度派生视图.md（默认只打印对账）
-    --strict  有对账项时返回非 0
+    --write       把派生视图写到 05_工作区/02_状态/05_进度派生视图.md（默认只打印对账）
+    --strict      有对账项时返回非 0
+    --preflight   细纲定稿前收敛检查：结构（PLAN023）+ 引用（REF003 等）+
+                  内部标识泄漏（OUTLINE_LEAK001）+ 冷读记录，只看目标章、一次性
+                  给单一 pass/fail 与逐条修复清单。取代弱模型手动分别跑
+                  audit_consistency.py --rule planning/reference/outline_leak
+                  再肉眼核对结构那一套。退出码 0=PASS，1=FAIL。
 
 对账项也由 `audit_consistency.py` 的 `progress` 规则（PROGRESS001/002）执行，
 所以 `check.sh` 会自动拦住漂移；本脚本额外给出人能读的全景表。
@@ -370,6 +376,73 @@ def reconcile(novel_dir: Path, declared: dict[str, str], rep: Report) -> list[tu
     return out
 
 
+# ────────────────────────────────────────────────────── 细纲定稿前一把过（--preflight 细纲 N）
+
+def preflight_outline(novel_dir: Path, number: int) -> tuple[bool, str]:
+    """结构 + 引用 + leak + 冷读记录一把跑，只看目标章，单一 pass/fail + 修复清单。
+
+    取代之前弱模型要分别跑 `audit_consistency.py --rule planning/reference/
+    outline_leak`（还得肉眼在一堆全书 Finding 里找出属于这一章的）+
+    `progress_report.py` 看冷读记录三件事。三条 audit 规则本身要靠全书上下文
+    解析引用/索引，所以规则照常跑全量，只是把结果按本章细纲文件路径过滤。
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from audit import AuditEngine, AuditContext
+    from audit.rules.reference import ReferenceRule
+    from audit.rules.planning import PlanningRule
+    from audit.rules.outline_leak import OutlineLeakRule
+
+    rep = collect(novel_dir)
+    candidates = [c for c in rep.chapters if c.number == number and c.outline is not None]
+    if not candidates:
+        return False, (f"未找到 章{number:04d} 的细纲文件"
+                        f"（03_规划/**/规划_卷*_章{number:04d}.md）")
+    if len(candidates) > 1:
+        found = "、".join(f"`{c.outline.relative_to(novel_dir).as_posix()}`" for c in candidates)
+        return False, (f"章{number:04d} 匹配到多个细纲文件（跨部/卷同号），"
+                        f"preflight 只认单一路径，需手动指认：{found}")
+    c = candidates[0]
+    rel = c.outline.relative_to(novel_dir).as_posix()
+
+    engine = AuditEngine(novel_dir)
+    engine.register_rule(ReferenceRule())
+    engine.register_rule(PlanningRule())
+    engine.register_rule(OutlineLeakRule())
+    all_findings = engine.run(context=AuditContext(novel_dir))
+    findings = [f for f in all_findings if f.file == rel]
+
+    checks = [
+        ("结构（planning）", [f for f in findings if f.rule == "planning"]),
+        ("引用（reference）", [f for f in findings if f.rule == "reference"]),
+        ("内部标识泄漏（outline_leak）", [f for f in findings if f.rule == "outline_leak"]),
+    ]
+
+    ok = True
+    L = [f"=== {c.cid} 细纲定稿前检查（{rel}）==="]
+    for label, fs in checks:
+        if not fs:
+            L.append(f"  ✔ {label}：0 项")
+            continue
+        ok = False
+        L.append(f"  ✘ {label}：{len(fs)} 项")
+        for f in fs:
+            loc = f"第{f.line}行 " if f.line else ""
+            L.append(f"      [{f.severity}] {f.code} {loc}{f.message}")
+            if f.suggestion:
+                L.append(f"        → {f.suggestion}")
+
+    if c.outline_cold_rounds > 0:
+        L.append(f"  ✔ 冷读记录：{c.outline_cold_rounds} 节")
+    else:
+        ok = False
+        L.append("  ✘ 冷读记录：0 节（`02_状态/03_细纲对照记录.md` 缺失或无 `## 冷读` 分节）"
+                  "——先跑 `review_manuscript.py --mode outline` 冷读循环")
+
+    L.append("")
+    L.append("PASS" if ok else "FAIL")
+    return ok, "\n".join(L)
+
+
 # ────────────────────────────────────────────────────── 渲染
 
 def render_derived(rep: Report) -> str:
@@ -461,12 +534,29 @@ def main() -> int:
                     help=f"写出派生视图到 {DERIVED_REL}")
     ap.add_argument("--format", choices=["text", "json"], default="text")
     ap.add_argument("--strict", action="store_true", help="有对账项时返回非 0")
+    ap.add_argument("--preflight", nargs=2, metavar=("KIND", "N"),
+                    help="细纲定稿前一把过：--preflight 细纲 <章号>（结构+引用+leak+冷读记录，"
+                         "单一 pass/fail，与 --write/--format/--strict 互斥）")
     args = ap.parse_args()
 
     novel_dir = Path(args.novel_dir).resolve()
     if not novel_dir.is_dir():
         print(f"目录不存在：{novel_dir}", file=sys.stderr)
         return 1
+
+    if args.preflight:
+        kind, num_s = args.preflight
+        if kind != "细纲":
+            print(f"暂只支持 --preflight 细纲 <N>，收到 kind={kind!r}", file=sys.stderr)
+            return 2
+        try:
+            number = int(num_s)
+        except ValueError:
+            print(f"章号需为整数，收到 {num_s!r}", file=sys.stderr)
+            return 2
+        ok, text = preflight_outline(novel_dir, number)
+        print(text)
+        return 0 if ok else 1
 
     rep = collect(novel_dir)
 

@@ -705,6 +705,79 @@ class TestProgressRule(unittest.TestCase):
         self.assertEqual(len(progress001_findings[0].locations), 2)
 
 
+class TestPreflightOutline(unittest.TestCase):
+    """preflight_outline（`--preflight 细纲 <N>`）的单元测试。"""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_pass_when_clean_and_has_cold_read(self):
+        """结构/引用/leak 均无 Finding、冷读记录非空 → PASS。"""
+        novel_dir = build_novel_fixture(self.tmp)  # 默认出场对象表无【场景列表】段，不触发 PLAN023
+
+        ok, text = progress_report.preflight_outline(novel_dir, 1)
+
+        self.assertTrue(ok)
+        self.assertIn("PASS", text)
+        self.assertIn("章0001", text)
+        self.assertIn("冷读记录：1 节", text)
+
+    def test_fail_when_no_chapter_found(self):
+        """章号在 03_规划/ 下找不到对应细纲文件 → FAIL，不抛异常。"""
+        novel_dir = build_novel_fixture(self.tmp)
+
+        ok, text = progress_report.preflight_outline(novel_dir, 999)
+
+        self.assertFalse(ok)
+        self.assertIn("未找到", text)
+        self.assertIn("章0999", text)
+
+    def test_fail_when_no_cold_read_record(self):
+        """结构/引用/leak 都干净，但没有冷读记录 → 仍判 FAIL（冷读记录项拦）。"""
+        novel_dir = build_novel_fixture(self.tmp, outline_cold_read_record=None)
+
+        ok, text = progress_report.preflight_outline(novel_dir, 1)
+
+        self.assertFalse(ok)
+        self.assertIn("FAIL", text)
+        self.assertIn("冷读记录：0 节", text)
+
+    def test_fail_when_scene_structure_not_canonical(self):
+        """【场景列表】下没有 `### 第N场景` 标题（PLAN023）→ 结构项拦，判 FAIL。"""
+        novel_dir = build_novel_fixture(self.tmp, outline_exists=False)
+        _write(novel_dir / "03_规划/01_第01部/01_卷01/规划_卷01_章0001.md", """# 第一章细纲
+## 出场对象
+| 对象 | 出场方式 |
+|---|---|
+| @主角 | 登场 |
+
+## 【场景列表】
+
+#### 场景 1：起笔
+非 canonical 的场景小标题，extract.scene_blocks 抓不到。
+""")
+
+        ok, text = progress_report.preflight_outline(novel_dir, 1)
+
+        self.assertFalse(ok)
+        self.assertIn("结构（planning）：1 项", text)
+        self.assertIn("PLAN023", text)
+
+    def test_fail_when_multiple_chapters_share_number(self):
+        """跨部/卷同章号撞在一起 → preflight 拒绝猜测，报「匹配到多个」。"""
+        novel_dir = build_novel_fixture(self.tmp)
+        _write(novel_dir / "03_规划/02_第02部/01_卷01/规划_卷01_章0001.md",
+               (novel_dir / "03_规划/01_第01部/01_卷01/规划_卷01_章0001.md").read_text(encoding="utf-8"))
+
+        ok, text = progress_report.preflight_outline(novel_dir, 1)
+
+        self.assertFalse(ok)
+        self.assertIn("匹配到多个", text)
+
+
 class TestRenderDerived(unittest.TestCase):
     """render_derived 的单元测试。"""
 
