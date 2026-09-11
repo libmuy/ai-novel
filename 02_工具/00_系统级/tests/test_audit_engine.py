@@ -133,6 +133,29 @@ class TestAuditEngine(unittest.TestCase):
         codes = [f.code for f in ManuscriptRule().run(AuditContext(self.novel_dir))]
         self.assertNotIn("MANUSCRIPT003", codes)
 
+    def test_manuscript004_stutter_phrase(self):
+        """同一 4+ 字短语紧邻重复一次（本地编辑删句漏删旧半句的痕迹）→ MANUSCRIPT004 warning。"""
+        ms = self.novel_dir / "10_正文" / "01_第01部" / "01_卷01"
+        ms.mkdir(parents=True, exist_ok=True)
+        (ms / "章0001.md").write_text(
+            "现在经脉里那点气走得极慢，走得极慢，走几步就要停一停。\n", encoding="utf-8")
+
+        findings = ManuscriptRule().run(AuditContext(self.novel_dir))
+        m004 = [f for f in findings if f.code == "MANUSCRIPT004"]
+        self.assertEqual(len(m004), 1)
+        self.assertEqual(m004[0].severity, Severity.WARNING)
+        self.assertIn("走得极慢，走得极慢", m004[0].message)
+
+    def test_manuscript004_silent_on_short_idiomatic_reduplication(self):
+        """`一下一下`/`很久很久` 这类 ≤3 字的惯用重叠修辞不误报（min 单元长度=4）。"""
+        ms = self.novel_dir / "10_正文" / "01_第01部" / "01_卷01"
+        ms.mkdir(parents=True, exist_ok=True)
+        (ms / "章0001.md").write_text(
+            "像糙石磨骨，一下一下，顺着四肢百骸碾过去。他等了很久很久才缓过来。\n", encoding="utf-8")
+
+        codes = [f.code for f in ManuscriptRule().run(AuditContext(self.novel_dir))]
+        self.assertNotIn("MANUSCRIPT004", codes)
+
     # ---- manuscript_lexicon：正文禁用词 ----
 
     def _run_lexicon(self, manuscript: str, wordlist=None):

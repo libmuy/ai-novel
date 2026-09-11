@@ -52,6 +52,38 @@ def han_count(text: str) -> int:
     return len(_HAN_RE.findall(body))
 
 
+_ANCHOR_QUOTE_RE = re.compile(r"「([^」]+)」")
+_ANCHOR_LINE_RE = re.compile(r"^[\s→]*锚点[:：]")  # 只认真正的「→ 锚点：」行，
+# 不认某条 bullet 描述文字里顺带提到"锚点"两个字（比如引卷纲自己的数值批注）
+_WS_RE = re.compile(r"\s+")
+_ANCHOR_ELISION_RE = re.compile(r"……|…")  # 锚点句里的省略号＝"中间还有别的字，跳过"，不是逐字标点
+
+
+def stale_landing_anchors(landing_check_text: str, manuscript_text: str) -> list[str]:
+    """`03_细纲落地核对.md` 里已勾选（非 ❌未落地/豁免）的 `「锚点句」` 是否还能在
+    当前正文里找到——找不到多半是核对表生成之后正文又被改了句子（落地核对锚点变成了
+    幽灵引用），不是"漏勾选"那类会被 PROGRESS005 拦住的问题，需要单独报出来。
+
+    锚点句里的 `……`/`…` 是人工写核对表时的**省略号惯例**（"中间还有别的字，跳过不引"），
+    不代表正文里真有这三个点；因此按 `……` 切成若干段，只要求每段各自在正文里出现
+    （不要求相邻/顺序），比死板的整串匹配更贴合实际写法，也更不容易误报。
+    """
+    norm_ms = _WS_RE.sub("", manuscript_text)
+    stale: list[str] = []
+    for ln in landing_check_text.splitlines():
+        s = ln.strip()
+        if not _ANCHOR_LINE_RE.match(s):
+            continue  # 只处理真正的「→ 锚点：」行——排除文件头说明行和 bullet 正文里顺带提到"锚点"的情况
+        if "❌未落地" in s or "豁免" in s:
+            continue
+        for q in _ANCHOR_QUOTE_RE.findall(s):
+            parts = [p for p in (_WS_RE.sub("", seg) for seg in _ANCHOR_ELISION_RE.split(q)) if p]
+            if parts and all(p in norm_ms for p in parts):
+                continue
+            stale.append(q)
+    return stale
+
+
 @dataclass
 class Chapter:
     part: int
@@ -69,6 +101,7 @@ class Chapter:
     merged: bool = False
     has_landing_check: bool = False    # 02_状态/03_细纲落地核对.md 存在
     landing_check_open: bool = False   # 该表仍有未锚定项（未勾选复选框 / 残留占位符 / 未 waive 的 ❌未落地）
+    landing_check_stale: list[str] = field(default_factory=list)  # 锚点句在当前正文里找不到逐字匹配
     declared_outline: str | None = None
     declared_manuscript: str | None = None
 
@@ -201,14 +234,18 @@ def collect(novel_dir: Path) -> Report:
             lc = st / "03_细纲落地核对.md"
             c.has_landing_check = lc.exists()
             if c.has_landing_check:
+                lc_text = lc.read_text(encoding="utf-8", errors="ignore")
                 # `>` 引用行是给人看的说明（本身含 `❌未落地` 等字样），不参与判定
-                body = [ln for ln in lc.read_text(encoding="utf-8", errors="ignore").splitlines()
-                        if not ln.lstrip().startswith(">")]
+                body = [ln for ln in lc_text.splitlines() if not ln.lstrip().startswith(">")]
                 c.landing_check_open = (
                     any(re.match(r"\s*-\s*\[\s*\]\s+\S", ln) for ln in body)
                     or any("〔待填：正文" in ln for ln in body)
                     or any("❌未落地" in ln and "waive" not in ln.lower() and "豁免" not in ln
                            for ln in body))
+                # `10_正文` 循环在本循环之前跑过，c.manuscript 此刻已就位（若存在）
+                if c.manuscript is not None:
+                    c.landing_check_stale = stale_landing_anchors(
+                        lc_text, c.manuscript.read_text(encoding="utf-8", errors="ignore"))
 
     # ── 状态层折叠进度
     sync = novel_dir / SYNC_REL
@@ -317,6 +354,19 @@ def reconcile(novel_dir: Path, declared: dict[str, str], rep: Report) -> list[tu
         elif c.declared_manuscript == "待校验" and c.has_landing_check and c.landing_check_open:
             out.append(("warning", "PROGRESS005",
                         f"{c.cid} 细纲落地核对表已生成但还有未锚定项——转定稿前要清完"))
+
+        # PROGRESS006：落地核对表已勾选，但锚点句在当前正文里逐字找不到（幽灵锚点）。
+        #   典型成因——生成核对表在前、之后又对正文做了一轮本地精修/冷读改稿，
+        #   改动没有回头同步核对表，锚点句就指向了一句已经不存在的话。
+        #   不属于"漏勾选"（PROGRESS005 管不到），必须单独报，否则核对表会悄悄失真。
+        if c.has_landing_check and c.landing_check_stale:
+            sev = "error" if c.declared_manuscript == "定稿" else "warning"
+            sample = "；".join(f"「{q}」" for q in c.landing_check_stale[:3])
+            more = f" 等共 {len(c.landing_check_stale)} 处" if len(c.landing_check_stale) > 3 else ""
+            out.append((sev, "PROGRESS006",
+                        f"{c.cid} 落地核对表里 {len(c.landing_check_stale)} 处锚点句在当前正文里找不到"
+                        f"逐字匹配（{sample}{more}）——多半是核对表生成后正文又被改了，"
+                        f"锚点没跟着回核，需要重新核对该表"))
     return out
 
 

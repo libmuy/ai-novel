@@ -91,7 +91,9 @@ def build_novel_fixture(temp_dir: Path, **opts) -> Path:
         _write(novel_dir / f"05_工作区/03_第01部/03_卷01/03_章0001/00_提示词/01_正文生成_修订{i}.md", f"修订 {i}")
 
     # 细纲落地核对表（03_细纲落地核对.md）；默认建一张全部锚定完的干净表
-    landing = opts.get("landing_check", "# 落地核对\n\n- [x] 场景钩子：X\n      → 锚点：正文「某句」\n")
+    # 锚点须能在默认正文（见 manuscript_exists 分支）里逐字找到，否则会触发 PROGRESS006（幽灵锚点）
+    landing = opts.get("landing_check",
+                        "# 落地核对\n\n- [x] 场景钩子：X\n      → 锚点：「这是一篇测试正文」\n")
     if landing is not None:
         _write(novel_dir / "05_工作区/03_第01部/03_卷01/03_章0001/02_状态/03_细纲落地核对.md", landing)
 
@@ -579,6 +581,61 @@ class TestReconcile(unittest.TestCase):
                           "      → 锚点：❌未落地（正文缺这句连接性交代）\n")
         p005 = [lv for lv, code, _ in findings if code == "PROGRESS005"]
         self.assertEqual(p005, ["error"])
+
+    # ---- PROGRESS006：落地核对表锚点在当前正文里找不到（幽灵锚点）----
+
+    def test_progress006_stale_anchor_when_finalized_is_error(self):
+        """已勾选的锚点句在正文里找不到逐字匹配、正文已「定稿」 → PROGRESS006 error。"""
+        findings = self._finalized(
+            manuscript_text="他咬着牙站了起来，一步一步朝矿道口走去。\n",
+            landing_check="# 落地核对\n\n- [x] 场景钩子：X\n"
+                          "      → 锚点：「他哭着跪了下去」\n")
+        p006 = [(lv, m) for lv, code, m in findings if code == "PROGRESS006"]
+        self.assertEqual(len(p006), 1)
+        self.assertEqual(p006[0][0], "error")
+        self.assertIn("他哭着跪了下去", p006[0][1])
+
+    def test_progress006_stale_anchor_when_draft_is_warning(self):
+        """同样的幽灵锚点，正文还是「待校验」/草稿阶段 → 只降级为 warning，不拦。"""
+        novel_dir = build_novel_fixture(
+            self.tmp,
+            progress_table="| 文件 | 状态 |\n|---|---|\n"
+                           "| `10_正文/01_第01部/01_卷01/章0001.md` | 待校验 |\n",
+            manuscript_text="他咬着牙站了起来，一步一步朝矿道口走去。\n",
+            cold_read_record="# 记录\n## 冷读1\n内容\n",
+            landing_check="# 落地核对\n\n- [x] 场景钩子：X\n"
+                          "      → 锚点：「他哭着跪了下去」\n")
+        declared = progress_report.declared_status(novel_dir)
+        rep = progress_report.collect(novel_dir)
+        findings = progress_report.reconcile(novel_dir, declared, rep)
+        p006 = [lv for lv, code, _ in findings if code == "PROGRESS006"]
+        self.assertEqual(p006, ["warning"])
+
+    def test_progress006_ellipsis_anchor_matches_non_adjacent_text(self):
+        """锚点里的 `……` 是"中间还省了别的字"的惯例，不要求两段在正文里紧邻。"""
+        findings = self._finalized(
+            manuscript_text="他咬着牙站了起来。背上的伤还在渗血。一步一步朝矿道口走去。\n",
+            landing_check="# 落地核对\n\n- [x] 场景钩子：X\n"
+                          "      → 锚点：「他咬着牙站了起来。……一步一步朝矿道口走去。」\n")
+        self.assertNotIn("PROGRESS006", [code for _, code, _ in findings])
+
+    def test_progress006_waived_or_unlanded_anchor_not_checked(self):
+        """`❌未落地`/`豁免` 的行本来就不是"已确认落地"的锚点，不该被当幽灵锚点报。"""
+        findings = self._finalized(
+            manuscript_text="他咬着牙站了起来。\n",
+            landing_check="# 落地核对\n\n"
+                          "- [x] 场景钩子：X\n      → 锚点：❌未落地（这句没写）\n"
+                          "- [x] 要点：Y\n      → 锚点：豁免：本章不涉及\n")
+        self.assertNotIn("PROGRESS006", [code for _, code, _ in findings])
+
+    def test_progress006_prose_mentioning_anchor_word_not_checked(self):
+        """bullet 正文里顺带提到"锚点"两个字（非 `→ 锚点：` 行）不参与核验。"""
+        findings = self._finalized(
+            manuscript_text="他咬着牙站了起来。\n",
+            landing_check="# 落地核对\n\n"
+                          "- [x] 涉及资源：灵心草（取卷纲锚点「≈5 下品」折算）\n"
+                          "      → 锚点：「他咬着牙站了起来」\n")
+        self.assertNotIn("PROGRESS006", [code for _, code, _ in findings])
 
 
 class TestProgressRule(unittest.TestCase):

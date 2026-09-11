@@ -22,6 +22,12 @@ class ManuscriptRule(AuditRule):
 
         ref_pattern = re.compile(r"@(地名|势力|人物|类型|书籍|伏笔|区域)\.")
         heading_re = re.compile(r"^\s{0,3}#{1,6}\s")
+        # MANUSCRIPT004：同一 4~20 字短语紧邻重复一次（中间只隔一个顿号/逗号或空白）。
+        # 这是本地手改/局部替换最常留下的"卡壳"痕迹——真实案例：
+        # 「现在经脉里那点气走得极慢，走得极慢，走几步就要停一停」（改稿时删了半句忘删旧半句）。
+        # 有意的中文重叠修辞（"一下一下""很久很久"）单字重叠单元通常 ≤3 字，min=4 基本不会误伤；
+        # 已在全书既有定稿正文上跑过一遍，0 误报。
+        stutter_re = re.compile(r"([一-鿿]{4,20})([，,、]\s*)\1")
         resolver = ReferenceResolver(context)
 
         # MANUSCRIPT003：正文首行是 Markdown 标题（`# 第04章` 之类），
@@ -62,6 +68,20 @@ class ManuscriptRule(AuditRule):
                         line=idx,
                         source=line.strip(),
                         suggestion="正文为最终读者成稿，请删除或更正其中的数据层引用语法 @类型.",
+                        locations=[f"{fi.relative_path}:第{idx}行"]
+                    ))
+
+                # 4. 相邻重复短语（卡壳编辑遗留）
+                for m in stutter_re.finditer(line):
+                    findings.append(Finding(
+                        severity=Severity.WARNING,
+                        rule=self.name,
+                        code="MANUSCRIPT004",
+                        message=f"「{m.group(0)}」——同一短语紧邻重复，像是本地编辑删句时漏删旧半句",
+                        file=fi.relative_path,
+                        line=idx,
+                        source=line.strip(),
+                        suggestion="核对是否为编辑遗留的重复片段；确系作者刻意的重叠修辞（少见）可忽略",
                         locations=[f"{fi.relative_path}:第{idx}行"]
                     ))
 
