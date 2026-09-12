@@ -31,16 +31,15 @@ from ..models import Finding, Severity
 from ..engine import AuditRule
 from ..context import AuditContext
 from .manuscript_lexicon import _parse_lexicon, LEXICON_REL
+from .db_chapter import CHAPTER_LEVEL_PATTERNS
 
 REDLINE_REL = "01_设定/00_红线包.md"
 
-# 章节级编号（借 db_chapter 的口径，去掉卷级/场景级——红线包本就是卷级视图）
-_CHAPTER_ID_PATTERNS = [
-    re.compile(r"第\s*\d{1,4}\s*章"),
-    re.compile(r"第[一二三四五六七八九十百零两]{1,5}章"),
-    re.compile(r"(?<![A-Za-z])[cC][hH]\s*\d{1,4}(?![A-Za-z0-9])"),
-    re.compile(r"(?<!\d)章\s*\d{4}(?!\d)"),
-]
+# 章节级编号——唯一权威定义在 `db_chapter.CHAPTER_LEVEL_PATTERNS`，这里直接复用、
+# 不重新维护一份正则（曾经两处独立定义，图省事各写各的，是要防的那类漂移本身）。
+# 红线包是**卷级**视图，"卷1"/"本卷"合法——因此只借用不含卷级/场景级判定的这个子集，
+# db_chapter 自己额外拦的卷级/场景级模式（数据库卡片不该有任何粒度的编号）不适用于此。
+_CHAPTER_ID_PATTERNS = CHAPTER_LEVEL_PATTERNS
 
 _WAIVER_RE = re.compile(r"<!--\s*REDLINE-ok:")
 _SECTION_SIX_RE = re.compile(r"^##\s+六[、.]")

@@ -24,15 +24,24 @@ from ..models import Finding, Severity
 from ..engine import AuditRule
 from ..context import AuditContext
 
-# 小说结构编号（不含世界内年代/in-world 书籍章节）
-_PATTERNS = [
+# 章节级编号——本项目对「第N章」类编号唯一的判定口径，供本规则与 `redline.py`
+# （红线包 REDLINE004：卷级视图，允许"卷1"/"本卷"但不允许逐章编号）共用，
+# 不各自维护一份、避免判定标准悄悄分叉（`00_系统架构规范.md` §二·A）。
+CHAPTER_LEVEL_PATTERNS = [
     re.compile(r"第\s*\d{1,4}\s*章"),
     re.compile(r"第[一二三四五六七八九十百零两]{1,5}章"),
-    re.compile(r"卷\s*\d{1,4}\s*第"),
     re.compile(r"(?<![A-Za-z])[cC][hH]\s*\d{1,4}(?![A-Za-z0-9])"),
-    re.compile(r"场景\s*[\d一二三四五六七八九十]{1,3}"),
     re.compile(r"(?<!\d)章\s*\d{4}(?!\d)"),
 ]
+
+# 本规则专用：数据库卡片不该有任何粒度的小说结构编号，额外拦卷级/场景级
+# （红线包是卷级视图，"卷1"/"本卷"合法，不能共用这两条，故不并入上面的共享集合）。
+_VOLUME_SCENE_PATTERNS = [
+    re.compile(r"卷\s*\d{1,4}\s*第"),
+    re.compile(r"场景\s*[\d一二三四五六七八九十]{1,3}"),
+]
+
+_PATTERNS = CHAPTER_LEVEL_PATTERNS + _VOLUME_SCENE_PATTERNS
 
 _WAIVER = re.compile(r"<!--\s*DBCHAP-ok:")
 

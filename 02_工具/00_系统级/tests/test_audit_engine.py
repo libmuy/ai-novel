@@ -199,6 +199,36 @@ class TestAuditEngine(unittest.TestCase):
             "## 正则\n\\d*\\s*公里   // 现代距离\n")
         self.assertIn("LEXICON001", found)
 
+    def test_lexicon_pipe_merged_line_flagged(self):
+        """章0006 教训：`## 包含` 区把几个词用「|」连成一行，`_parse_lexicon` 会把整行
+        当一个词，谁都匹配不到——这些词悄悄失效，LEXICON003 要在这时就报出来。"""
+        found = self._run_lexicon(
+            "他随身带着一小块塑料。",
+            "## 包含\n塑料|橡胶|玻璃   // 现代材料\n")
+        self.assertIn("LEXICON003", found)
+        self.assertIn("塑料|橡胶|玻璃", found["LEXICON003"].message)
+        # 且因为整行被当成一个词，"塑料"本身反而拦不住（正是这个 bug 的症状）
+        self.assertNotIn("LEXICON001", found)
+
+    def test_lexicon_pipe_in_pending_section_flagged(self):
+        found = self._run_lexicon(
+            "无关正文。",
+            "## 待确认\n分钟|小时   // 时间单位待定\n")
+        self.assertIn("LEXICON003", found)
+
+    def test_lexicon_pipe_in_regex_section_not_flagged(self):
+        """`## 正则` 区的「|」是合法的正则「或」，不是误连写，不该报。"""
+        found = self._run_lexicon(
+            "他走了三公里才到矿口。",
+            "## 正则\n\\d+\\s*(?:公里|千米)   // 现代距离\n")
+        self.assertNotIn("LEXICON003", found)
+
+    def test_lexicon_no_pipe_not_flagged(self):
+        found = self._run_lexicon(
+            "灯火在沟壁上乱跳。",
+            "## 包含\n手电\n塑料\n")
+        self.assertNotIn("LEXICON003", found)
+
     def test_todo_done_missing_entity(self):
         db_dir = self.novel_dir / "02_数据库"
         db_dir.mkdir(exist_ok=True)
@@ -832,6 +862,13 @@ class TestAuditEngine(unittest.TestCase):
         found = self._run_redline(self._redline_body(
             extra="- 长周期第 10 章后才允许崩溃。 <!-- REDLINE-ok: 周期内序数 -->\n\n"))
         self.assertNotIn("REDLINE004", found)
+
+    def test_redline_shares_chapter_patterns_with_db_chapter(self):
+        """章节级编号判定口径只应有一份权威（`db_chapter.CHAPTER_LEVEL_PATTERNS`），
+        `redline` 复用它、不各自维护一份——否则两处判定标准会悄悄分叉。"""
+        from audit.rules import redline as redline_mod
+        from audit.rules.db_chapter import CHAPTER_LEVEL_PATTERNS
+        self.assertIs(redline_mod._CHAPTER_ID_PATTERNS, CHAPTER_LEVEL_PATTERNS)
 
     # ---- card_sections：出场对象卡区块守护（§二·A）----
 
