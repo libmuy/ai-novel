@@ -782,11 +782,22 @@ def validate_changelog(changelog_path, novel_dir):
       6. 骨架占位符残留（`build_state_snapshot.py --changelog-skeleton` 的 `〔待填…〕` 没替换）
       7. 「值」列写成「无变化 / 同上」这类——本章该字段没变就删整行，别把它当值填
       8. 「修改」行的值与骨架标注的上章值逐字相同（no-op：抄了 `<!-- 上章值：X -->` 注释）
+      9. 「新建」行的对象ID，去掉方括号后与已注册对象（基线 + 最新状态）同名——状态对象ID
+         不带 `@引用` 语法要求的方括号（那是引用定界符，不是ID的一部分），"新建"一个方括号
+         变体等于给同一实体另开一张身份证，STATE022 事后能查到但 `--force`/`--skip-audit-gate`
+         都能绕过折叠后门禁（ch0006 教训：`物品.[缺嘴酒葫芦]` 已注册，又"新建"了一个
+         `物品.缺嘴酒葫芦`，两个对象各记各的状态，谁都不再是权威）。
     其余语法 / 值域交给 audit_consistency.py。字段词表加载逻辑与
     `02_工具/01_小说通用工具/audit/rules/state.py:_load_field_vocab` 等价，改一处两处都要同步。
     """
     errs = []
     vocab = _load_field_vocab(novel_dir)
+    existing_norm_ids = {}
+    for _d in (baseline_dir(novel_dir), latest_state_dir(novel_dir)):
+        for _r in load_state_tree(_d):
+            _oid = _r.get("object_id", "")
+            _norm = _oid.replace("[", "").replace("]", "")
+            existing_norm_ids.setdefault(_norm, _oid)
     # 检查 3 用：注册字段名 → 「分句起始 + 字段名 + 冒号」的行内标签正则
     label_pats = {
         name: re.compile(r"(?:^|[\s。；;，、）)])" + re.escape(name) + r"[：:]")
@@ -866,6 +877,15 @@ def validate_changelog(changelog_path, novel_dir):
                 errs.append(
                     f"第{i}行 「{field}」的值与上章一模一样（no-op「修改」）——"
                     f"本章这个字段没变化就删掉整行，别照抄 `<!-- 上章值 -->` 注释。")
+        # 检查 9：「新建」对象ID去掉方括号后与已注册对象撞名
+        if chg == "新建":
+            norm_oid = obj_id.replace("[", "").replace("]", "")
+            prior = existing_norm_ids.get(norm_oid)
+            if prior and prior != obj_id:
+                errs.append(
+                    f"第{i}行 对象ID `{obj_id}` 标「新建」，但去掉方括号后与已注册对象 "
+                    f"`{prior}` 同名——这是同一个对象，状态对象ID不带方括号，应把「变更类型」"
+                    f"改成「修改」并统一用既有ID `{prior}`（不要另起一个方括号变体）。")
         prev_val_hint = None
         prev_val_trunc = False
     # 去重、保序
