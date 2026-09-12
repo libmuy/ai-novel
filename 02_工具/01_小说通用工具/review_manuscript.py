@@ -100,7 +100,8 @@ _OUTPUT_SPEC = """只输出一个 JSON 对象，形如：
 # ---------------------------------------------------------------- 路径解析
 
 def _resolve_targets(args):
-    """→ (novel_dir: Path, mode: str, target_file: Path, ref: dict, record_path: Path|None)"""
+    """→ (novel_dir, mode, target_file, ref, record_path, chapter_number|None)"""
+    chapter_number = None
     if args.chapter_dir:
         chdir = Path(args.chapter_dir).resolve()
         m_part = re.search(r"第0*(\d+)部", str(chdir))
@@ -109,6 +110,7 @@ def _resolve_targets(args):
         if not (m_part and m_vol and m_ch):
             sys.exit(f"无法从 {chdir} 解析 部/卷/章 号")
         part, vol, ch = int(m_part.group(1)), int(m_vol.group(1)), int(m_ch.group(1))
+        chapter_number = ch
         # 05_工作区/03_第NN部/03_卷NN/03_章XXXX → 向上 4 层是小说目录
         novel_dir = chdir.parents[3]
         vol_s, ch_s = f"{vol:02d}", f"{ch:04d}"
@@ -150,6 +152,9 @@ def _resolve_targets(args):
         mode = args.mode or ("outline" if "规划" in target.name or "细纲" in target.name else "manuscript")
         record = Path(args.record).resolve() if args.record else target.with_name(target.stem + "_冷读记录.md")
         ref = {}
+        m_ch = re.search(r"章0*(\d+)", target.name)
+        if m_ch:
+            chapter_number = int(m_ch.group(1))
 
     # 公共参照
     setto = novel_dir / "01_设定"
@@ -162,7 +167,7 @@ def _resolve_targets(args):
 
     if args.record:
         record = Path(args.record).resolve()
-    return novel_dir, mode, target, ref, record
+    return novel_dir, mode, target, ref, record, chapter_number
 
 
 def _find_novel_dir(p: Path) -> Path:
@@ -330,6 +335,31 @@ def _read(p) -> str:
         return ""
 
 
+# ---------------------------------------------------------------- 目标文件指纹
+#
+# 章0006 教训：「复验」冷读跑在落位修补稿**之前**——两轮评审花的是外部评审器
+# 配额，重新发现的却几乎是同一批已经改掉的问题（发现原文逐字含改前措辞），
+# 直到人工比对文件写入时间戳才坐实。这不是「记得先落位」能防住的（这条规则
+# 已经写在技能文档里，还是被绕过），只能靠工具自己挡：冷读前把目标文件当前
+# 内容的指纹，和记录文件里上一轮冷读时的指纹比，一样就拒绝跑，不花评审器
+# 配额、不写一条注定误导人的记录。
+
+def _fingerprint(text: str) -> str:
+    import hashlib
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
+
+
+_FINGERPRINT_RE = re.compile(r"^>\s*目标文件指纹：([0-9a-f]{12})\s*$", re.M)
+
+
+def _last_fingerprint(record_path) -> str | None:
+    text = _read(record_path)
+    if not text:
+        return None
+    hits = _FINGERPRINT_RE.findall(text)
+    return hits[-1] if hits else None
+
+
 def main():
     ap = argparse.ArgumentParser(description="多模型冷读评审")
     ap.add_argument("--chapter-dir")
@@ -340,6 +370,9 @@ def main():
     ap.add_argument("--passes", choices=["1", "2", "both"])
     ap.add_argument("--record")
     ap.add_argument("--no-write", action="store_true")
+    ap.add_argument("--allow-unchanged", action="store_true",
+                     help="目标文件与上一轮冷读时指纹相同也照跑（默认拒绝——多半是忘了"
+                          "落位修补稿；确实要对同一份内容重跑才加这个）")
     args = ap.parse_args()
     if not args.chapter_dir and not args.manuscript:
         ap.error("需要 --chapter-dir 或 --manuscript")
@@ -349,10 +382,21 @@ def main():
     runc = cfg.get("run", {})
     passes = args.passes or runc.get("passes", "both")
 
-    novel_dir, mode, target, ref, record_path = _resolve_targets(args)
+    novel_dir, mode, target, ref, record_path, chapter_number = _resolve_targets(args)
     if not target or not Path(target).exists():
         sys.exit(f"待审文本不存在: {target}")
     target_text = _read(target)
+    fingerprint = _fingerprint(target_text)
+
+    if record_path and not args.allow_unchanged:
+        last_fp = _last_fingerprint(record_path)
+        if last_fp and last_fp == fingerprint:
+            sys.exit(
+                f"目标文件与上一轮冷读时的内容完全一致（指纹 {fingerprint} 未变）——\n"
+                f"是不是忘了把修补后的稿子落位到 {target} 再跑？对着旧稿复验只会重新\n"
+                f"发现同一批已经改掉的问题，还白花评审器配额（章0006 教训）。\n"
+                f"确实要对同一份内容重跑（比如换了评审器配置），加 --allow-unchanged。"
+            )
 
     # 参照文本
     ref_texts = {k: _read(v) for k, v in ref.items() if v and Path(v).exists()}
@@ -428,7 +472,21 @@ def main():
         "findings": findings,
         "finding_count": len(findings),
         "degraded": "single_critic" if degraded else None,
+        "fingerprint": fingerprint,
     }
+
+    # 细纲的确定性收敛检查（结构/引用/内部标识泄漏/冷读记录）随每轮冷读一并跑出来，
+    # 不留给「等分诊完了再想起来跑一下 preflight」——章0006 教训：那一步被跳过了，
+    # 落位的细纲带着 6 处内部标识泄漏，直到人工另外跑 preflight 才发现。
+    outline_preflight = None
+    if mode == "outline" and chapter_number is not None:
+        try:
+            import progress_report
+            ok, text = progress_report.preflight_outline(novel_dir, chapter_number)
+            outline_preflight = {"ok": ok, "report": text}
+        except Exception as e:  # noqa: BLE001 — preflight 报不出来不该崩主流程
+            outline_preflight = {"ok": None, "report": f"preflight 未跑成：{type(e).__name__}: {e}"}
+        result["outline_preflight"] = outline_preflight
 
     if not external_ok and not subagent_requested:
         result["error"] = "无可用独立评审器（opencode + local_qwen 均不可用，claude_subagent=false）"
@@ -441,13 +499,18 @@ def main():
 
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
+    if outline_preflight and outline_preflight["ok"] is False:
+        sys.exit(4)  # 细纲 preflight FAIL——冷读发现之外，还有确定性检查没过
+
 
 def _append_record(path: Path, result: dict):
     path.parent.mkdir(parents=True, exist_ok=True)
     ts = _dt.datetime.now().strftime("%Y-%m-%d %H:%M")
     lines = [f"\n\n---\n\n## 冷读评审 · {ts}\n",
              f"> 脚本：`review_manuscript.py`（{result['mode']} / {result['passes']} 遍）",
-             f"> 评审器：{', '.join(result['critics_used']) or '（无）'}"]
+             f"> 评审器：{', '.join(result['critics_used']) or '（无）'}",
+             f"> 目标文件指纹：{result.get('fingerprint', '?')}",
+             "> （下一轮若指纹未变，脚本会拒绝跑——先落位修补稿）"]
     if result["critics_unavailable"]:
         lines.append(f"> 不可用：{'; '.join(result['critics_unavailable'])}")
     if result.get("claude_subagent_requested"):
@@ -473,6 +536,20 @@ def _append_record(path: Path, result: dict):
                          f"{f.get('problem', '')}"
                          + (f"（改：{f['fix_hint']}）" if f.get("fix_hint") else "")
                          + f"  〈{f.get('_source', '')}〉")
+    pf = result.get("outline_preflight")
+    if pf is not None:
+        lines.append("")
+        lines.append("**确定性 · 细纲 preflight**（`progress_report.py --preflight 细纲 N`）")
+        lines.append("")
+        if pf["ok"] is False:
+            lines.append("🚫 **FAIL**——冷读发现之外，还有确定性检查没过，不能直接进分诊/转定稿：")
+        elif pf["ok"] is True:
+            lines.append("✅ PASS")
+        else:
+            lines.append("⚠️ 未跑成")
+        lines.append("```")
+        lines.append(pf["report"])
+        lines.append("```")
     lines.append("\n> 下一步：主 Agent 分诊 + 分级 + 写外科手术式修改提示词（≤3 轮循环）。")
     with open(path, "a", encoding="utf-8") as fh:
         fh.write("\n".join(lines) + "\n")

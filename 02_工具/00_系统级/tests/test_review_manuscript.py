@@ -114,6 +114,96 @@ class TestAppendRecordPreservesContent(unittest.TestCase):
             self.assertIn("🔴 [不闭合]", out)
 
 
+class TestFingerprint(unittest.TestCase):
+    def test_deterministic(self):
+        self.assertEqual(R._fingerprint("同一段文字"), R._fingerprint("同一段文字"))
+
+    def test_changes_with_content(self):
+        self.assertNotEqual(R._fingerprint("v1"), R._fingerprint("v2"))
+
+    def test_length_is_12(self):
+        self.assertEqual(len(R._fingerprint("x")), 12)
+
+
+class TestLastFingerprint(unittest.TestCase):
+    """章0006 教训：「复验」冷读读的是修补前旧稿——两轮结论几乎重现旧发现，直到
+    比对文件写入时间戳才坐实。`_last_fingerprint` 是防这个复发的闸的读取半边。"""
+
+    def test_reads_last_of_multiple_rounds(self):
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "rec.md"
+            p.write_text(
+                "## 冷读评审 · A\n\n> 目标文件指纹：aaaaaaaaaaaa\n\n"
+                "## 冷读评审 · B\n\n> 目标文件指纹：bbbbbbbbbbbb\n",
+                encoding="utf-8")
+            self.assertEqual(R._last_fingerprint(p), "bbbbbbbbbbbb")
+
+    def test_missing_file_returns_none(self):
+        self.assertIsNone(R._last_fingerprint(Path("/nonexistent/x.md")))
+
+    def test_old_format_record_without_fingerprint_returns_none(self):
+        """这次改动前写的记录没有指纹行——不能因此把老章节全部拒之门外。"""
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "rec.md"
+            p.write_text("## 冷读评审 · A\n\n（旧格式记录，没有指纹行）\n", encoding="utf-8")
+            self.assertIsNone(R._last_fingerprint(p))
+
+
+class TestAppendRecordFingerprintRoundtrip(unittest.TestCase):
+    def test_written_fingerprint_is_parseable(self):
+        """`_append_record` 写的指纹行必须能被 `_last_fingerprint` 原样读回——
+        两处一旦格式不一致，防重复冷读的闸形同虚设（这个 bug 在实现时真的出现过：
+        指纹和后面的说明文字挤在同一行，正则要求行尾紧跟指纹，永远匹配不上）。"""
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "rec.md"
+            R._append_record(p, {
+                "mode": "outline", "passes": "1",
+                "critics_used": ["opencode/x·无参照"], "critics_unavailable": [],
+                "claude_subagent_requested": False,
+                "lexicon": [], "findings": [],
+                "fingerprint": "deadbeef0000",
+            })
+            self.assertEqual(R._last_fingerprint(p), "deadbeef0000")
+
+
+class TestAppendRecordOutlinePreflight(unittest.TestCase):
+    def _base(self, **extra):
+        return {
+            "mode": "outline", "passes": "1",
+            "critics_used": [], "critics_unavailable": [],
+            "claude_subagent_requested": False,
+            "lexicon": [], "findings": [],
+            "fingerprint": "abc123456789",
+            **extra,
+        }
+
+    def test_fail_renders_prominently(self):
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "rec.md"
+            R._append_record(p, self._base(
+                outline_preflight={"ok": False, "report": "...细纲preflight报告..."}))
+            out = p.read_text(encoding="utf-8")
+            self.assertIn("🚫", out)
+            self.assertIn("细纲preflight报告", out)
+
+    def test_pass_renders(self):
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "rec.md"
+            R._append_record(p, self._base(
+                outline_preflight={"ok": True, "report": "...PASS..."}))
+            out = p.read_text(encoding="utf-8")
+            self.assertIn("✅ PASS", out)
+
+    def test_absent_in_manuscript_mode(self):
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "rec.md"
+            d = self._base()
+            d["mode"] = "manuscript"
+            R._append_record(p, d)
+            out = p.read_text(encoding="utf-8")
+            self.assertNotIn("preflight", out)
+
+
 class TestCriticFamily(unittest.TestCase):
     def test_opencode_entry(self):
         self.assertEqual(R._critic_family("opencode/mimo-v2.5-free·无参照"), "opencode")
@@ -207,7 +297,7 @@ class TestResolveTargetsChapterDir(unittest.TestCase):
             class A:
                 chapter_dir = str(root / "05_工作区/03_第01部/03_卷01/03_章0001")
                 manuscript = novel_dir = mode = record = None
-            nd, mode, tgt, ref, rec = R._resolve_targets(A())
+            nd, mode, tgt, ref, rec, chapter_number = R._resolve_targets(A())
             self.assertEqual(nd, root.resolve())
             self.assertEqual(mode, "manuscript")
             self.assertTrue(str(tgt).endswith("10_正文/01_第01部/01_卷01/章0001.md"))
@@ -215,6 +305,7 @@ class TestResolveTargetsChapterDir(unittest.TestCase):
             self.assertIn("细纲", ref)
             self.assertIn("世界基本法则", ref)
             self.assertNotIn("本章开篇状态", ref)  # 没建这个文件时不该假装有
+            self.assertEqual(chapter_number, 1)
 
     def test_manuscript_mode_includes_opener_when_present(self):
         """`00_开篇状态.md` 存在时要作为参照喂给冷读——它是前几章正文折叠出的
@@ -230,7 +321,7 @@ class TestResolveTargetsChapterDir(unittest.TestCase):
             class A:
                 chapter_dir = str(root / "05_工作区/03_第01部/03_卷01/03_章0001")
                 manuscript = novel_dir = mode = record = None
-            _, _, _, ref, _ = R._resolve_targets(A())
+            _, _, _, ref, _, _ = R._resolve_targets(A())
             self.assertIn("本章开篇状态", ref)
             self.assertEqual(ref["本章开篇状态"], opener)
 
@@ -244,10 +335,11 @@ class TestResolveTargetsChapterDir(unittest.TestCase):
                 chapter_dir = str(root / "05_工作区/03_第01部/03_卷01/03_章0001")
                 manuscript = novel_dir = record = None
                 mode = "outline"
-            nd, mode, tgt, ref, rec = R._resolve_targets(A())
+            nd, mode, tgt, ref, rec, chapter_number = R._resolve_targets(A())
             self.assertEqual(mode, "outline")
             self.assertTrue(str(tgt).endswith("规划_卷01_章0001.md"))
             self.assertTrue(str(rec).endswith("03_细纲对照记录.md"))
+            self.assertEqual(chapter_number, 1)
 
 
 if __name__ == "__main__":
