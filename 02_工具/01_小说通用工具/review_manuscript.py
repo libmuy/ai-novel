@@ -160,8 +160,6 @@ def _resolve_targets(args):
     setto = novel_dir / "01_设定"
     ref["世界基本法则"] = setto / "00_小说概念.md"
     ref["主角档案"] = setto / "00_主角档案.md"
-    if (setto / "00_主角档案_当前阶段.md").exists():
-        ref["主角档案·当前阶段"] = setto / "00_主角档案_当前阶段.md"
     if (setto / "00_禁用词表.md").exists():
         ref["禁用词表"] = setto / "00_禁用词表.md"
 

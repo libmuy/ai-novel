@@ -27,6 +27,7 @@
               不过 → 只出阻断报告，一个文件都不写。
     PREPARE   物化本章派生输入：
                 · 开篇状态  —— 确定性折叠（`build_state_snapshot.py --chapter-opener`）
+                · 主角档案切片 —— 从全量档案自动剪裁（`prune_character_sheet.py`）
                 · 上章摘要  —— LLM 压缩（细纲任务、非首章）
               任一失败 → 阻断报告 + 退出 2，不写存档 / 不预建。
               `--dry-run` 下不执行、只探测并报告。
@@ -157,7 +158,7 @@ def _gen_prev_summary(ctx: assemble.Ctx, prev_path: Path) -> str:
 
 
 def _prepare(ctx: assemble.Ctx, task: str, *, dry_run: bool) -> _Prep:
-    """物化派生输入（开篇状态 / 上章摘要）。任一失败 → prep.blockers 非空。"""
+    """物化派生输入（开篇状态 / 主角档案切片 / 上章摘要）。任一失败 → prep.blockers 非空。"""
     prep = _Prep()
     lay = ctx.layout
 
@@ -189,6 +190,23 @@ def _prepare(ctx: assemble.Ctx, task: str, *, dry_run: bool) -> _Prep:
             prep.blockers.append(progress.Blocker(
                 "本章开篇状态物化失败",
                 L.rel(ctx.novel_dir, lay.opener_state), None, "已物化",
+                _indent(detail) or "见 stderr"))
+
+    # ── (a.5) 主角档案当前阶段切片：自动从全量档案剪裁 ──
+    if dry_run:
+        prep.notes.append(("主角档案切片", "将从 00_主角档案.md 自动剪裁"))
+    else:
+        r = subprocess.run(
+            [sys.executable, str(_HERE / "prune_character_sheet.py"),
+             str(ctx.novel_dir), str(lay.volume)],
+            capture_output=True, text=True)
+        if r.returncode == 0:
+            prep.notes.append(("主角档案切片", "已生成"))
+        else:
+            detail = ((r.stdout or "") + (r.stderr or "")).strip()[-800:]
+            prep.blockers.append(progress.Blocker(
+                "主角档案当前阶段切片生成失败",
+                "01_设定/00_主角档案_当前阶段.md", None, "已生成",
                 _indent(detail) or "见 stderr"))
 
     # ── (b) 上章摘要：LLM 压缩，仅细纲、仅非首章 ──
