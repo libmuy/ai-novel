@@ -178,7 +178,7 @@ def build_landing_checklist(chapter_dir, novel_dir=None, *, force=False,
 def main():
     ap = argparse.ArgumentParser(description="从单章细纲生成「细纲落地核对」清单")
     ap.add_argument("chapter_dir",
-                    help="章工作区目录，如 05_工作区/03_第01部/03_卷01/06_章0004")
+                    help="章工作区目录，如 05_工作区/03_第01部/03_卷01/0004")
     ap.add_argument("--novel-dir", help="小说根目录（缺省自动定位）")
     ap.add_argument("--force", action="store_true", help="覆盖已存在的非空清单")
     ap.add_argument("--grandfather", metavar="理由",

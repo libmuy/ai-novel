@@ -67,35 +67,35 @@ def build_novel_fixture(temp_dir: Path, **opts) -> Path:
     # 正文
     if opts.get("manuscript_exists", True):
         manuscript_text = opts.get("manuscript_text", "# 第一章\n这是一篇测试正文。包含一些汉字来测试计数。\n" * 5)
-        _write(novel_dir / "10_正文/01_第01部/01_卷01/章0001.md", manuscript_text)
+        _write(novel_dir / "10_正文/01_第01部/01_卷01/正文_卷01_章0001.md", manuscript_text)
 
     # 工作区状态
     if opts.get("has_changelog", False):
-        _write(novel_dir / "05_工作区/03_第01部/03_卷01/03_章0001/02_状态/01_状态履历.md", "# 履历\n")
+        _write(novel_dir / "05_工作区/03_第01部/03_卷01/0001/02_状态/01_状态履历.md", "# 履历\n")
 
     if opts.get("has_opener", False):
-        _write(novel_dir / "05_工作区/03_第01部/03_卷01/03_章0001/02_状态/00_开篇状态.md", "# 开篇状态\n")
+        _write(novel_dir / "05_工作区/03_第01部/03_卷01/0001/02_状态/00_开篇状态.md", "# 开篇状态\n")
 
     # 冷读记录（正文）
     cold_read_content = opts.get("cold_read_record")
     if cold_read_content is not None:
-        _write(novel_dir / "05_工作区/03_第01部/03_卷01/03_章0001/02_状态/02_正文校验记录.md", cold_read_content)
+        _write(novel_dir / "05_工作区/03_第01部/03_卷01/0001/02_状态/02_正文校验记录.md", cold_read_content)
 
     # 冷读记录（细纲）——默认建一份，让「细纲定稿必须有冷读记录」的门禁在无关测试里不误触
     outline_cr = opts.get("outline_cold_read_record", "# 细纲对照记录\n## 冷读评审 · 测试\n内容\n")
     if outline_cr is not None:
-        _write(novel_dir / "05_工作区/03_第01部/03_卷01/03_章0001/02_状态/03_细纲对照记录.md", outline_cr)
+        _write(novel_dir / "05_工作区/03_第01部/03_卷01/0001/02_状态/03_细纲对照记录.md", outline_cr)
 
     # 修订文件
     for i in range(1, opts.get("revision_count", 0) + 1):
-        _write(novel_dir / f"05_工作区/03_第01部/03_卷01/03_章0001/00_提示词/01_正文生成_修订{i}.md", f"修订 {i}")
+        _write(novel_dir / f"05_工作区/03_第01部/03_卷01/0001/00_提示词/01_正文生成_修订{i}.md", f"修订 {i}")
 
     # 细纲落地核对表（03_细纲落地核对.md）；默认建一张全部锚定完的干净表
     # 锚点须能在默认正文（见 manuscript_exists 分支）里逐字找到，否则会触发 PROGRESS006（幽灵锚点）
     landing = opts.get("landing_check",
                         "# 落地核对\n\n- [x] 场景钩子：X\n      → 锚点：「这是一篇测试正文」\n")
     if landing is not None:
-        _write(novel_dir / "05_工作区/03_第01部/03_卷01/03_章0001/02_状态/03_细纲落地核对.md", landing)
+        _write(novel_dir / "05_工作区/03_第01部/03_卷01/0001/02_状态/03_细纲落地核对.md", landing)
 
 
     # 同步状态
@@ -151,14 +151,14 @@ class TestDeclaredStatusAndLookup(unittest.TestCase):
         table = """| 文件 | 状态 |
 |---|---|
 | `03_规划/01_第01部/01_卷01/规划_卷01_章0001.md` | 定稿 |
-| `10_正文/01_第01部/01_卷01/章0001.md` | 待校验 |
+| `10_正文/01_第01部/01_卷01/正文_卷01_章0001.md` | 待校验 |
 """
         _write(novel_dir / "00_进度.md", table)
 
         result = progress_report.declared_status(novel_dir)
 
         self.assertEqual(result["03_规划/01_第01部/01_卷01/规划_卷01_章0001.md"], "定稿")
-        self.assertEqual(result["10_正文/01_第01部/01_卷01/章0001.md"], "待校验")
+        self.assertEqual(result["10_正文/01_第01部/01_卷01/正文_卷01_章0001.md"], "待校验")
 
     def test_declared_status_skips_separator_row(self):
         """declared_status 跳过分隔符行 |---|---|。"""
@@ -183,12 +183,12 @@ class TestDeclaredStatusAndLookup(unittest.TestCase):
         novel_dir.mkdir()
 
         declared = {
-            "章0001.md": "定稿",
+            "正文_卷01_章0001.md": "定稿",
             "03_规划/01_第01部/01_卷01/规划_卷01_章0002.md": "待校验"
         }
 
         # 全路径匹配
-        path1 = novel_dir / "10_正文/01_第01部/01_卷01/章0001.md"
+        path1 = novel_dir / "10_正文/01_第01部/01_卷01/正文_卷01_章0001.md"
         result1 = progress_report.lookup(declared, path1, novel_dir)
         self.assertEqual(result1, "定稿")
 
@@ -311,7 +311,7 @@ class TestReconcile(unittest.TestCase):
         # 进度表声明了一个不存在的文件
         _write(novel_dir / "00_进度.md", """| 文件 | 状态 |
 |---|---|
-| `10_正文/01_第01部/01_卷01/章0001.md` | 定稿 |
+| `10_正文/01_第01部/01_卷01/正文_卷01_章0001.md` | 定稿 |
 """)
 
         declared = progress_report.declared_status(novel_dir)
@@ -392,7 +392,7 @@ class TestReconcile(unittest.TestCase):
             progress_table="""| 文件 | 状态 |
 |---|---|
 | `03_规划/01_第01部/01_卷01/规划_卷01_章0001.md` | 定稿 |
-| `10_正文/01_第01部/01_卷01/章0001.md` | 待校验 |
+| `10_正文/01_第01部/01_卷01/正文_卷01_章0001.md` | 待校验 |
 """,
             manuscript_exists=True,
             outline_exists=True,
@@ -413,7 +413,7 @@ class TestReconcile(unittest.TestCase):
             self.tmp,
             progress_table="""| 文件 | 状态 |
 |---|---|
-| `10_正文/01_第01部/01_卷01/章0001.md` | 定稿 |
+| `10_正文/01_第01部/01_卷01/正文_卷01_章0001.md` | 定稿 |
 """,
             has_changelog=False  # 没有履历
         )
@@ -432,7 +432,7 @@ class TestReconcile(unittest.TestCase):
             self.tmp,
             progress_table="""| 文件 | 状态 |
 |---|---|
-| `10_正文/01_第01部/01_卷01/章0001.md` | 定稿 |
+| `10_正文/01_第01部/01_卷01/正文_卷01_章0001.md` | 定稿 |
 """,
             has_changelog=True,
             merged_upto="—"  # 未折叠
@@ -452,7 +452,7 @@ class TestReconcile(unittest.TestCase):
             self.tmp,
             progress_table="""| 文件 | 状态 |
 |---|---|
-| `10_正文/01_第01部/01_卷01/章0001.md` | 定稿 |
+| `10_正文/01_第01部/01_卷01/正文_卷01_章0001.md` | 定稿 |
 """,
             cold_read_record=None  # 无冷读记录文件
         )
@@ -472,7 +472,7 @@ class TestReconcile(unittest.TestCase):
             progress_table="""| 文件 | 状态 |
 |---|---|
 | `03_规划/01_第01部/01_卷01/规划_卷01_章0001.md` | 定稿 |
-| `10_正文/01_第01部/01_卷01/章0001.md` | 定稿 |
+| `10_正文/01_第01部/01_卷01/正文_卷01_章0001.md` | 定稿 |
 """,
             has_changelog=True,
             merged_upto="章0001",
@@ -490,7 +490,7 @@ class TestReconcile(unittest.TestCase):
         """帮手：正文标「定稿」的最小 fixture，其余流水线件默认齐全。"""
         base = dict(
             progress_table="| 文件 | 状态 |\n|---|---|\n"
-                           "| `10_正文/01_第01部/01_卷01/章0001.md` | 定稿 |\n",
+                           "| `10_正文/01_第01部/01_卷01/正文_卷01_章0001.md` | 定稿 |\n",
             has_changelog=True, merged_upto="章0001",
             cold_read_record="# 记录\n## 冷读1\n内容\n",
         )
@@ -542,7 +542,7 @@ class TestReconcile(unittest.TestCase):
         novel_dir = build_novel_fixture(
             self.tmp,
             progress_table="| 文件 | 状态 |\n|---|---|\n"
-                           "| `10_正文/01_第01部/01_卷01/章0001.md` | 待校验 |\n",
+                           "| `10_正文/01_第01部/01_卷01/正文_卷01_章0001.md` | 待校验 |\n",
             cold_read_record=None,
         )
         declared = progress_report.declared_status(novel_dir)
@@ -600,7 +600,7 @@ class TestReconcile(unittest.TestCase):
         novel_dir = build_novel_fixture(
             self.tmp,
             progress_table="| 文件 | 状态 |\n|---|---|\n"
-                           "| `10_正文/01_第01部/01_卷01/章0001.md` | 待校验 |\n",
+                           "| `10_正文/01_第01部/01_卷01/正文_卷01_章0001.md` | 待校验 |\n",
             manuscript_text="他咬着牙站了起来，一步一步朝矿道口走去。\n",
             cold_read_record="# 记录\n## 冷读1\n内容\n",
             landing_check="# 落地核对\n\n- [x] 场景钩子：X\n"
@@ -689,8 +689,8 @@ class TestProgressRule(unittest.TestCase):
         # 创建进度表，声明两个不存在的文件
         _write(novel_dir / "00_进度.md", """| 文件 | 状态 |
 |---|---|
-| `10_正文/01_第01部/01_卷01/章0001.md` | 定稿 |
-| `10_正文/01_第01部/01_卷01/章0002.md` | 定稿 |
+| `10_正文/01_第01部/01_卷01/正文_卷01_章0001.md` | 定稿 |
+| `10_正文/01_第01部/01_卷01/正文_卷01_章0002.md` | 定稿 |
 """)
 
         context = AuditContext(novel_dir)

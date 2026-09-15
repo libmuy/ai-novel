@@ -81,7 +81,7 @@ class TestMergeAuditGate(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             novel = _setup(td)
             chap = _write_changelog(
-                novel, "03_第01部/03_卷01/03_章0001",
+                novel, "03_第01部/03_卷01/0001",
                 [["角色.示例", "身体状况", "描述", "受伤", "0001", "x", "修改"]])
             r = _run_merge(chap)
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
@@ -93,7 +93,7 @@ class TestMergeAuditGate(unittest.TestCase):
             live_obj = os.path.join(
                 novel, "05_工作区/02_状态/01_最新状态/01_角色/01_角色_示例.md")
             chap = _write_changelog(
-                novel, "03_第01部/03_卷01/03_章0001",
+                novel, "03_第01部/03_卷01/0001",
                 # 通过 validate_changelog（对象终态在词表、类型对、变更类型合法），
                 # 但值「活着」不在闭集 → 折叠后 STATE026
                 [["角色.示例", "对象终态", "运算-枚举", "活着", "0001", "x", "修改"]])
@@ -109,7 +109,7 @@ class TestMergeAuditGate(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             novel = _setup(td)
             chap = _write_changelog(
-                novel, "03_第01部/03_卷01/03_章0001",
+                novel, "03_第01部/03_卷01/0001",
                 [["角色.示例", "对象终态", "运算-枚举", "活着", "0001", "x", "修改"]])
             r = _run_merge(chap, "--skip-audit-gate")
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)

@@ -76,7 +76,7 @@ def _setup(td, outline=OUTLINE):
     plan_dir = os.path.join(novel, "03_规划", "01_第01部", "01_卷01")
     os.makedirs(plan_dir, exist_ok=True)
     open(os.path.join(plan_dir, "规划_卷01_章0002.md"), "w", encoding="utf-8").write(outline)
-    chap = os.path.join(novel, "05_工作区", "01_第01部", "01_卷01", "02_章0002")
+    chap = os.path.join(novel, "05_工作区", "01_第01部", "01_卷01", "0002")
     os.makedirs(os.path.join(chap, "02_状态"), exist_ok=True)
     return novel, chap
 

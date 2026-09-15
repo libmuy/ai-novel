@@ -346,7 +346,7 @@ class TestAuditEngine(unittest.TestCase):
             lines = ["# 白名单\n", "| 对象ID | 类型 | 说明 |", "| --- | --- | --- |"]
             lines += [f"| {r} | — | test |" for r in whitelist_rows]
             wl.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        ch_dir = self.novel_dir / "05_工作区" / "03_第01部" / "03_卷01" / "03_章0001" / "02_状态"
+        ch_dir = self.novel_dir / "05_工作区" / "03_第01部" / "03_卷01" / "0001" / "02_状态"
         _write_changelog(str(ch_dir / "01_状态履历.md"), changelog_rows)
         context = AuditContext(self.novel_dir)
         return {f.code: f for f in StateRegistryRule().run(context)}
@@ -422,7 +422,7 @@ class TestAuditEngine(unittest.TestCase):
         """换一本书（主角不叫苏砚），主角的状态行不得被判为「找不到卡片」。"""
         from audit.rules.state_registry import StateRegistryRule
         self._write_protagonist_card("云拾一")
-        ch_dir = self.novel_dir / "05_工作区" / "03_第01部" / "03_卷01" / "03_章0001" / "02_状态"
+        ch_dir = self.novel_dir / "05_工作区" / "03_第01部" / "03_卷01" / "0001" / "02_状态"
         _write_changelog(str(ch_dir / "01_状态履历.md"),
                          [["角色.云拾一", "境界", "运算-枚举", "炼气一层"]])
         found = {f.code: f for f in StateRegistryRule().run(AuditContext(self.novel_dir))}
@@ -458,7 +458,7 @@ class TestAuditEngine(unittest.TestCase):
         card_dir.mkdir(parents=True, exist_ok=True)
         for name in ("柳禾", "苏砚"):
             (card_dir / f"07_人物_{name}.md").write_text(f"# 人物卡 · {name}\n", encoding="utf-8")
-        ch_dir = self.novel_dir / "05_工作区" / "03_第01部" / "03_卷01" / "03_章0001" / "02_状态"
+        ch_dir = self.novel_dir / "05_工作区" / "03_第01部" / "03_卷01" / "0001" / "02_状态"
         _write_changelog(str(ch_dir / "01_状态履历.md"), changelog_rows)
         context = AuditContext(self.novel_dir)
         return {f.code: f for f in RelationRule().run(context)}
@@ -668,7 +668,7 @@ class TestAuditEngine(unittest.TestCase):
             "# 全局状态 · 角色.苏砚\n\n> 对象ID: 角色.苏砚\n\n"
             "| 对象ID | 字段 | 类型 | 值 |\n| --- | --- | --- | --- |\n"
             "| 角色.苏砚 | 当前心境 | 描述 | 平静 |\n", encoding="utf-8")
-        ch = nd / "05_工作区/03_第01部/03_卷01/03_章0001/02_状态"
+        ch = nd / "05_工作区/03_第01部/03_卷01/0001/02_状态"
         _write_changelog(str(ch / "01_状态履历.md"),
                          [["角色.苏砚", "当前心境", "描述", "警惕而克制", "0001", "2026-01-01", "修改"]])
         # 描述合并缓存（模拟 merge_chapter_state.py --merge-pending 已写）
@@ -677,14 +677,14 @@ class TestAuditEngine(unittest.TestCase):
             "对象": "角色.苏砚", "字段": "当前心境",
             "旧值sha": st.value_fingerprint("平静"),
             "新值sha": st.value_fingerprint("警惕而克制"),
-            "合并文本": merged, "章": "03_第01部/03_卷01/03_章0001", "时间": "2026-01-01",
+            "合并文本": merged, "章": "03_第01部/03_卷01/0001", "时间": "2026-01-01",
         }])
         # 写 01_最新状态（== 基线 ⊕ 履历，用缓存）+ manifest 折叠至章0001
         cache = st.load_merge_cache(str(nd))
         recs, _ = st.fold_all(str(nd / "05_工作区/02_状态/00_基线状态"),
                               st.iter_workspace_changelogs(str(nd)), cache=cache, resolver=None)
         st.write_state_tree(str(nd / "05_工作区/02_状态/01_最新状态"), recs,
-                            folded_chapter="03_第01部/03_卷01/03_章0001")
+                            folded_chapter="03_第01部/03_卷01/0001")
 
         codes = {f.code for f in StateRule().run(AuditContext(nd))}
         self.assertNotIn("STATE015", codes)

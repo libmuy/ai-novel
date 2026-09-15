@@ -23,8 +23,8 @@ _MANUSCRIPT = "第一段。\n\n第二段。\n\n※\n\n第二场。\n"
 def _make_tree(tmp: Path, with_audio=True, with_ch2=True):
     novel = tmp / "00_苍玄"
     (novel / "10_正文" / "01_第01部" / "01_卷01").mkdir(parents=True)
-    (novel / "10_正文" / "01_第01部" / "01_卷01" / "章0001.md").write_text(_MANUSCRIPT, encoding="utf-8")
-    ws1 = novel / "05_工作区" / "03_第01部" / "03_卷01" / "03_章0001"
+    (novel / "10_正文" / "01_第01部" / "01_卷01" / "正文_卷01_章0001.md").write_text(_MANUSCRIPT, encoding="utf-8")
+    ws1 = novel / "05_工作区" / "03_第01部" / "03_卷01" / "0001"
     (ws1 / "00_提示词").mkdir(parents=True)
     (ws1 / "00_提示词" / "01_正文生成.md").write_text("# 提示词\n内容", encoding="utf-8")
     (ws1 / "02_状态").mkdir()
@@ -37,7 +37,7 @@ def _make_tree(tmp: Path, with_audio=True, with_ch2=True):
             '{"voice":"zh-CN-YunxiNeural","generated_at":"2026-09-03T20:00:00","duration_seconds":794}',
             encoding="utf-8")
     if with_ch2:
-        ws2 = novel / "05_工作区" / "03_第01部" / "03_卷01" / "04_章0002"
+        ws2 = novel / "05_工作区" / "03_第01部" / "03_卷01" / "0002"
         (ws2 / "00_提示词").mkdir(parents=True)
     # 规划目录
     plan = novel / "03_规划"
@@ -70,8 +70,8 @@ class TestScan(unittest.TestCase):
             entries = S.scan(_make_tree(Path(td)))
             self.assertEqual([e.key for e in entries], [(1, 1, 1), (1, 1, 2)])
             e1 = entries[0]
-            self.assertTrue(e1.manuscript.name == "章0001.md")
-            self.assertTrue(e1.ws_dir.name == "03_章0001")
+            self.assertTrue(e1.manuscript.name == "正文_卷01_章0001.md")
+            self.assertTrue(e1.ws_dir.name == "0001")
             self.assertTrue(e1.has_audio)
             self.assertEqual(e1.duration_s(), 794)
             self.assertEqual(e1.audio_units(), [(None, e1.audio_dir / "章0001.mp3")])

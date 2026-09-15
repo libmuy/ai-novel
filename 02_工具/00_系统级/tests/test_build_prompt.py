@@ -426,11 +426,11 @@ class TestProgressIndex(unittest.TestCase):
 | 文件 | 状态 |
 |---|---|
 | `03_规划/01_第01部/01_卷01/规划_卷01_章0001.md` | 定稿 |
-| `10_正文/01_第01部/01_卷01/章0001.md` | 待校验 |
+| `10_正文/01_第01部/01_卷01/正文_卷01_章0001.md` | 待校验 |
 """)
         idx = progress.ProgressIndex(self.tmp)
         self.assertEqual(idx.status_of(self.tmp / "03_规划/01_第01部/01_卷01/规划_卷01_章0001.md"), "定稿")
-        self.assertEqual(idx.status_of(self.tmp / "10_正文/01_第01部/01_卷01/章0001.md"), "待校验")
+        self.assertEqual(idx.status_of(self.tmp / "10_正文/01_第01部/01_卷01/正文_卷01_章0001.md"), "待校验")
 
     def test_progress_index_is_at_least(self):
         """is_at_least(path, "定稿") 对定稿返回 True，对待校验/草稿/未记录返回 False。"""
@@ -491,29 +491,25 @@ class TestLayout(unittest.TestCase):
         self.assertEqual(layout.chapter, 2)
         self.assertIn("第01部", str(layout.chapter_dir))
         self.assertIn("卷01", str(layout.chapter_dir))
-        self.assertIn("章0002", str(layout.chapter_dir))
+        self.assertEqual(layout.chapter_dir.name, "0002")
         # outline 和 manuscript 应该在规划/正文层
         self.assertIn("03_规划", str(layout.outline))
         self.assertIn("10_正文", str(layout.manuscript))
+        self.assertEqual(layout.manuscript.name, "正文_卷01_章0002.md")
 
     def test_layout_workspace_dir_numbering(self):
-        """章工作区目录编号：00/01/02 被标准子目录占用，章从 03 开始连续编号。
-
-        已有 03_章0001，新建章0002 应得 04_章0002。
-        """
-        # 搭工作区
-        _write(self.tmp / "05_工作区/03_第01部/03_卷01/03_章0001/02_状态/.placeholder", "")
+        """章工作区目录名是纯 4 位章节号本身，是两位数字编号规则的例外——不看兄弟
+        目录已有几个、不接续位置计数器，跟卷内已建了哪些章无关。"""
+        # 搭工作区：已有章1
+        _write(self.tmp / "05_工作区/03_第01部/03_卷01/0001/02_状态/.placeholder", "")
 
         layout = L.resolve(self.tmp, part=1, volume=1, chapter=2)
 
-        # 第二章应该用 04_ 前缀
-        self.assertTrue(layout.chapter_dir.name.startswith("04_"))
-        self.assertIn("章0002", layout.chapter_dir.name)
+        self.assertEqual(layout.chapter_dir.name, "0002")
 
     def test_layout_reuse_existing_chapter_dir(self):
-        """resolve 复用已存在的章目录，而不是创建新编号。"""
-        # 建立 05_章0002
-        existing = self.tmp / "05_工作区/03_第01部/03_卷01/05_章0002"
+        """resolve 对同一章号算出的目录路径是确定性的、可重入。"""
+        existing = self.tmp / "05_工作区/03_第01部/03_卷01/0002"
         _write(existing / "02_状态/.placeholder", "")
 
         layout = L.resolve(self.tmp, part=1, volume=1, chapter=2)
@@ -1065,7 +1061,7 @@ class TestBuildPromptCLI(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("阻断报告", result.stdout)
         # 不应该写出提示词存档
-        archive = novel_dir / "05_工作区/03_第01部/03_卷01/03_章0001/00_提示词/01_正文生成.md"
+        archive = novel_dir / "05_工作区/03_第01部/03_卷01/0001/00_提示词/01_正文生成.md"
         self.assertFalse(archive.exists())
 
 
@@ -1124,23 +1120,23 @@ class TestChapterOpenerCLI(unittest.TestCase):
         # 章0002 细纲只点名苏砚
         _write(nd / "03_规划/01_第01部/01_卷01/规划_卷01_章0002.md",
                "# 细纲\n## 出场对象\n| 对象ID | 出场方式 |\n|---|---|\n| `@主角` | 登场 |\n")
-        chap_state = nd / "05_工作区/03_第01部/03_卷01/04_章0002/02_状态"
+        chap_state = nd / "05_工作区/03_第01部/03_卷01/0002/02_状态"
         r = subprocess.run(
             [sys.executable, str(self.bss), "--chapter-opener", str(chap_state),
              "--novel-dir", str(nd)],
             capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         body = (chap_state / "00_开篇状态.md").read_text(encoding="utf-8")
-        self.assertTrue(body.startswith("# 本章开篇状态 · 03_第01部/03_卷01/04_章0002"))
+        self.assertTrue(body.startswith("# 本章开篇状态 · 03_第01部/03_卷01/0002"))
         self.assertIn("角色.苏砚", body)
         self.assertNotIn("角色.柳禾", body)      # 被出场对象清单裁掉
 
     def test_missing_baseline_exits_1(self):
         nd = self.tmp / "空小说"
-        (nd / "05_工作区/03_第01部/03_卷01/03_章0001/02_状态").mkdir(parents=True)
+        (nd / "05_工作区/03_第01部/03_卷01/0001/02_状态").mkdir(parents=True)
         r = subprocess.run(
             [sys.executable, str(self.bss), "--chapter-opener",
-             str(nd / "05_工作区/03_第01部/03_卷01/03_章0001/02_状态"),
+             str(nd / "05_工作区/03_第01部/03_卷01/0001/02_状态"),
              "--novel-dir", str(nd)],
             capture_output=True, text=True)
         self.assertEqual(r.returncode, 1)
@@ -1189,8 +1185,8 @@ class TestPreparePhaseCLI(unittest.TestCase):
         r = self._run(nd, "--dry-run")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("--dry-run", r.stdout)
-        opener = nd / "05_工作区/03_第01部/03_卷01/03_章0001/02_状态/00_开篇状态.md"
-        archive = nd / "05_工作区/03_第01部/03_卷01/03_章0001/00_提示词/00_单章细纲.md"
+        opener = nd / "05_工作区/03_第01部/03_卷01/0001/02_状态/00_开篇状态.md"
+        archive = nd / "05_工作区/03_第01部/03_卷01/0001/00_提示词/00_单章细纲.md"
         self.assertFalse(opener.exists(), "--dry-run 不该物化开篇状态")
         self.assertFalse(archive.exists(), "--dry-run 不该写提示词存档")
 
@@ -1198,7 +1194,7 @@ class TestPreparePhaseCLI(unittest.TestCase):
         nd = self._novel()
         r = self._run(nd)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        opener = nd / "05_工作区/03_第01部/03_卷01/03_章0001/02_状态/00_开篇状态.md"
+        opener = nd / "05_工作区/03_第01部/03_卷01/0001/02_状态/00_开篇状态.md"
         self.assertTrue(opener.exists())
         self.assertTrue(opener.read_text(encoding="utf-8").startswith("# 本章开篇状态"))
         self.assertIn("开篇状态", r.stdout)
@@ -1209,7 +1205,7 @@ class TestPreparePhaseCLI(unittest.TestCase):
         _write(nd / "00_进度.md",
                "| 文件 | 状态 |\n|---|---|\n"
                "| `03_规划/01_第01部/01_卷01/规划_卷01.md` | 定稿 |\n")
-        _write(nd / "10_正文/01_第01部/01_卷01/章0001.md", "苏砚醒来。\n" * 50)
+        _write(nd / "10_正文/01_第01部/01_卷01/正文_卷01_章0001.md", "苏砚醒来。\n" * 50)
         r = subprocess.run(
             [sys.executable, str(self.build_prompt_py), "--novel", str(nd),
              "--task", "细纲", "--chapter", "2"],
@@ -1322,8 +1318,13 @@ class TestManifestGolden(TestAssemble):
     #   `**道义类型**`/`**道义表述**` 格式（原先的 `## DY-001 规则` 太失真，索引抽不出
     #   有意义的字段）。MANUSCRIPT 不受影响（fixture 细纲【道义与感悟】写「无」，
     #   不触发 `_rv_dy_fh_outline` 的道义分支，也不经过 `dy_fallback_index`）。
-    GOLDEN_MANUSCRIPT = "c915b798afafa87c81792de177ae90b7b7945cabf0c412bc9d445f29c64c29e7"
-    GOLDEN_OUTLINE = "eae3fe7bc0bee240278a7aa2ac650099f05f843b86f797c28ce2479f4f318343"
+    # 2026-09-15（章工作区目录/正文文件名改造）：章工作区目录改用纯 4 位章节号
+    #   （`0001`，不带前缀不带「章」字，见 layout.py `_chapter_dirname`）；正文文件名改
+    #   `正文_卷VV_章CCCC.md`（与单章细纲 `规划_卷VV_章CCCC.md` 同形状，见 layout.py
+    #   `resolve()`）。两处都会原样出现在渲染出的提示词「落位目标」「产出保存文件名」
+    #   「提示词存档」等行里，MANUSCRIPT 与 OUTLINE 哈希均变。
+    GOLDEN_MANUSCRIPT = "257fedb5ad1a31dfb3a15ee92e4ce05708f0bb80c4088a6af031b922463a705b"
+    GOLDEN_OUTLINE = "efe0b100ab63271dfacccb8820f1a351aa532150746b4caf745058681700b37a"
 
     def _hash(self, text):
         import hashlib

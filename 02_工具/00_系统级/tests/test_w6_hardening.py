@@ -257,7 +257,7 @@ class TestStateTreeFingerprints(unittest.TestCase):
     def test_render_manifest_contains_fingerprint_lines(self):
         """render_manifest 输出包含三个指纹行。"""
         manifest = render_manifest(
-            folded_chapter="03_第01部/03_卷01/03_章0001",
+            folded_chapter="03_第01部/03_卷01/0001",
             tool="test_tool",
             n_objects=5,
             n_records=20,
@@ -304,7 +304,7 @@ class TestStateTreeFingerprints(unittest.TestCase):
 
 > 由状态脚本自动写入。
 
-- 折叠至章: 03_第01部/03_卷01/03_章0001
+- 折叠至章: 03_第01部/03_卷01/0001
 - 最后运行工具: test_tool
 """
         manifest_path = self.novel_dir / "05_工作区" / "02_状态" / "01_最新状态" / MANIFEST_FILENAME

@@ -8,9 +8,9 @@
 部/卷目录名可能带名称（`01_第01部` 或 `01_枯港遗玉`），所以一律用 glob 解析、
 不拼字符串——与 `review_manuscript.py` 的解析口径保持一致。
 
-工作区目录编号：每级 `05_工作区/…` 下固定 `00_提示词` `01_模型输出` `02_状态`，
-章目录接着往下连续编号（`03_章0001` `04_章0002` …），见 audit `workspace` 规则的
-「00-based 连续、不跳号」。新建章目录时按已有章目录数续号。
+工作区目录编号：每级 `05_工作区/…` 下固定 `00_提示词` `01_模型输出` `02_状态`；章目录是
+这条编号规则的例外，直接用纯 4 位章节号命名（`0001` `0002` …），不带前缀也不带「章」
+字，位宽永远跟随章节号本身，见 audit `workspace` 规则 `WS007`。
 """
 import re
 from dataclasses import dataclass
@@ -21,9 +21,6 @@ WS = "05_工作区"
 STD_SUBDIRS = ("00_提示词", "01_模型输出", "02_状态")
 # 每级工作区目录固定占用 00/01/02 三个号，子层级从 03 起
 FIRST_CHILD_INDEX = len(STD_SUBDIRS)
-
-_CHAPTER_DIR_RE = re.compile(r"^(\d{2})_章(\d{4})$")
-
 
 class LayoutError(Exception):
     pass
@@ -37,7 +34,7 @@ class ChapterLayout:
     chapter: int
 
     # 工作区
-    chapter_dir: Path          # 05_工作区/03_第01部/03_卷01/04_章0002
+    chapter_dir: Path          # 05_工作区/03_第01部/03_卷01/0002
     prompt_dir: Path           # …/00_提示词
     output_dir: Path           # …/01_模型输出
     state_dir: Path            # …/02_状态
@@ -45,7 +42,7 @@ class ChapterLayout:
 
     # canonical data paths
     outline: Path              # 03_规划/…/规划_卷VV_章CCCC.md
-    manuscript: Path           # 10_正文/…/章CCCC.md
+    manuscript: Path           # 10_正文/…/正文_卷VV_章CCCC.md
     volume_plan: Path          # 03_规划/…/规划_卷VV.md
     volume_foreshadow: Path    # 03_规划/…/00_伏笔册_卷VV.md
 
@@ -72,19 +69,9 @@ def _ws_child(parent: Path, pattern: str, default_name: str) -> Path:
     return parent / default_name
 
 
-def _next_chapter_dirname(volume_ws: Path, chapter: int) -> str:
-    """章目录名：`NN_章CCCC`，NN 接在 00/01/02 之后按已有章目录数续号。"""
-    existing = []
-    if volume_ws.exists():
-        for d in volume_ws.iterdir():
-            m = _CHAPTER_DIR_RE.match(d.name) if d.is_dir() else None
-            if m:
-                existing.append((int(m.group(2)), d.name))
-    for ch_num, name in existing:
-        if ch_num == chapter:
-            return name
-    idx = FIRST_CHILD_INDEX + len(existing)
-    return f"{idx:02d}_章{chapter:04d}"
+def _chapter_dirname(chapter: int) -> str:
+    """章目录名：纯 4 位章节号本身，天然递增，位宽永远跟随章节号。"""
+    return f"{chapter:04d}"
 
 
 def resolve(novel_dir: Path, part: int, volume: int, chapter: int) -> ChapterLayout:
@@ -98,7 +85,7 @@ def resolve(novel_dir: Path, part: int, volume: int, chapter: int) -> ChapterLay
     ws = novel_dir / WS
     part_ws = _ws_child(ws, rf"第0*{part}部", f"{FIRST_CHILD_INDEX:02d}_第{p2}部")
     vol_ws = _ws_child(part_ws, rf"卷0*{volume}\b", f"{FIRST_CHILD_INDEX:02d}_卷{v2}")
-    chapter_dir = vol_ws / _next_chapter_dirname(vol_ws, chapter)
+    chapter_dir = vol_ws / _chapter_dirname(chapter)
 
     # ---- 规划层 / 正文层（已存在的用 glob，缺的按规范拼）----
     plan_root = novel_dir / "03_规划"
@@ -117,7 +104,7 @@ def resolve(novel_dir: Path, part: int, volume: int, chapter: int) -> ChapterLay
         state_dir=chapter_dir / STD_SUBDIRS[2],
         opener_state=chapter_dir / STD_SUBDIRS[2] / "00_开篇状态.md",
         outline=plan_vol_dir / f"规划_卷{v2}_章{c4}.md",
-        manuscript=text_vol_dir / f"章{c4}.md",
+        manuscript=text_vol_dir / f"正文_卷{v2}_章{c4}.md",
         volume_plan=_glob_one(novel_dir, f"03_规划/*第{p2}部*/*卷{v2}*/规划_卷{v2}.md",
                               plan_vol_dir / f"规划_卷{v2}.md"),
         volume_foreshadow=_glob_one(novel_dir, f"03_规划/*第{p2}部*/*卷{v2}*/00_伏笔册_*.md",
@@ -168,7 +155,7 @@ def parse_chapter_dir(chapter_dir: Path) -> tuple[int, int, int]:
     s = str(chapter_dir)
     m_part = re.search(r"第0*(\d+)部", s)
     m_vol = re.search(r"卷0*(\d+)", s)
-    m_ch = re.search(r"章0*(\d+)", Path(chapter_dir).name)
+    m_ch = re.fullmatch(r"(\d+)", Path(chapter_dir).name)
     if not (m_part and m_vol and m_ch):
         raise LayoutError(f"无法从 {chapter_dir} 解析 部/卷/章 号")
     return int(m_part.group(1)), int(m_vol.group(1)), int(m_ch.group(1))

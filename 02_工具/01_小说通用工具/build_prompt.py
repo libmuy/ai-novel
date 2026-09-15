@@ -15,7 +15,7 @@
 ----
     build_prompt.py --novel 01_小说数据/00_苍玄 --task 正文   --chapter 3
     build_prompt.py --novel 01_小说数据/00_苍玄 --task 细纲   --chapter 3 [--part 1 --volume 1]
-    build_prompt.py --chapter-dir 01_小说数据/00_苍玄/05_工作区/03_第01部/03_卷01/05_章0003 --task 正文
+    build_prompt.py --chapter-dir 01_小说数据/00_苍玄/05_工作区/03_第01部/03_卷01/0003 --task 正文
 
     --dry-run     只报告，不写任何文件
     --force       覆盖已存在的提示词存档（默认只创建、不覆盖）
@@ -105,18 +105,19 @@ def _gate(ctx: assemble.Ctx, task: str) -> list[progress.Blocker]:
         if lay.chapter > 1 and prev is None:
             blockers.append(progress.Blocker(
                 "上一章正文未落位——滑动窗口取不到衔接素材",
-                L.rel(ctx.novel_dir, lay.manuscript.parent / f"章{lay.chapter - 1:04d}.md"),
+                L.rel(ctx.novel_dir, lay.manuscript.parent /
+                      f"正文_卷{lay.volume:02d}_章{lay.chapter - 1:04d}.md"),
                 None, "已落位（建议定稿）",
                 "先把上一章正文落位到 `10_正文/…`"))
         elif lay.chapter > 1:
             # 上一章正文落位了，但履历没写 → PREPARE 折叠会看不到它、开篇状态静默偏旧。
             prev_cl = next(iter(sorted(
-                lay.chapter_dir.parent.glob(f"*_章{lay.chapter - 1:04d}/02_状态/01_状态履历.md"))), None)
+                lay.chapter_dir.parent.glob(f"{lay.chapter - 1:04d}/02_状态/01_状态履历.md"))), None)
             if prev_cl is None or prev_cl.read_text(encoding="utf-8", errors="ignore").lstrip().startswith(">"):
                 blockers.append(progress.Blocker(
                     "上一章状态履历未写——本章开篇状态会漏掉上一章的状态变化",
                     L.rel(ctx.novel_dir, prev_cl) if prev_cl else
-                    f"05_工作区/…/*_章{lay.chapter - 1:04d}/02_状态/01_状态履历.md",
+                    f"05_工作区/…/{lay.chapter - 1:04d}/02_状态/01_状态履历.md",
                     None, "已填值并跑过 merge_chapter_state.py",
                     "对上一章跑 `build_state_snapshot.py --changelog-skeleton` 填值 → "
                     "`merge_chapter_state.py --chapter-dir <上一章目录>`，再重拼"))

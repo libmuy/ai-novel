@@ -59,10 +59,10 @@ class TestParagraphChunks(unittest.TestCase):
 
 def _make_chapter(tmp: Path, body: str = SAMPLE):
     novel = tmp / "novel"
-    ms = novel / "10_正文" / "01_第01部" / "01_卷01" / "章0001.md"
+    ms = novel / "10_正文" / "01_第01部" / "01_卷01" / "正文_卷01_章0001.md"
     ms.parent.mkdir(parents=True)
     ms.write_text(body, encoding="utf-8")
-    chdir = novel / "05_工作区" / "03_第01部" / "03_卷01" / "03_章0001"
+    chdir = novel / "05_工作区" / "03_第01部" / "03_卷01" / "0001"
     for sub in ("00_提示词", "01_模型输出", "02_状态"):
         (chdir / sub).mkdir(parents=True)
     return novel, ms, chdir

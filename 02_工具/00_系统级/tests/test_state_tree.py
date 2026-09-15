@@ -24,7 +24,7 @@ class TestNumericMerge(unittest.TestCase):
             novel = make_novel(td, baseline_records=[
                 ["角色.苏砚", "内力值", "运算-数值", "100"],
             ], chapters={
-                "03_第01部/03_卷01/03_章0001": [
+                "03_第01部/03_卷01/0001": [
                     ["角色.苏砚", "内力值", "运算-数值", "-20", "1", "2026-01-01", "-"],
                 ],
             })
@@ -39,7 +39,7 @@ class TestNumericMerge(unittest.TestCase):
             novel = make_novel(td, baseline_records=[
                 ["角色.苏砚", "内力值", "运算-数值", "100"],
             ], chapters={
-                "03_第01部/03_卷01/03_章0001": [
+                "03_第01部/03_卷01/0001": [
                     ["角色.苏砚", "内力值", "运算-数值", "55", "1", "2026-01-01", "-"],
                 ],
             })
@@ -58,7 +58,7 @@ class TestEnumMerge(unittest.TestCase):
             novel = make_novel(td, baseline_records=[
                 ["角色.苏砚", "境界", "运算-枚举", "炼气一层"],
             ], chapters={
-                "03_第01部/03_卷01/03_章0001": [
+                "03_第01部/03_卷01/0001": [
                     ["角色.苏砚", "境界", "运算-枚举", "炼气二层", "1", "2026-01-01", "-"],
                 ],
             })
@@ -77,7 +77,7 @@ class TestListMerge(unittest.TestCase):
             novel = make_novel(td, baseline_records=[
                 ["角色.苏砚", "持有物品", "运算-列表", "锈铁剑,破草鞋"],
             ], chapters={
-                "03_第01部/03_卷01/03_章0001": [
+                "03_第01部/03_卷01/0001": [
                     ["角色.苏砚", "持有物品", "运算-列表", "+培元丹,-破草鞋", "1", "2026-01-01", "-"],
                 ],
             })
@@ -96,7 +96,7 @@ class TestListNoPrefixRaises(unittest.TestCase):
             novel = make_novel(td, baseline_records=[
                 ["角色.苏砚", "持有物品", "运算-列表", "锈铁剑"],
             ], chapters={
-                "03_第01部/03_卷01/03_章0001": [
+                "03_第01部/03_卷01/0001": [
                     ["角色.苏砚", "持有物品", "运算-列表", "培元丹", "1", "2026-01-01", "-"],
                 ],
             })
@@ -114,7 +114,7 @@ class TestDescriptiveFirstTime(unittest.TestCase):
             novel = make_novel(td, baseline_records=[
                 ["角色.苏砚", "当前心境", "描述", "无"],
             ], chapters={
-                "03_第01部/03_卷01/03_章0001": [
+                "03_第01部/03_卷01/0001": [
                     ["角色.苏砚", "当前心境", "描述", "愤怒", "1", "2026-01-01", "-"],
                 ],
             })
@@ -136,7 +136,7 @@ class TestDescriptiveMergeCallsLlmOnce(unittest.TestCase):
                 ["角色.苏砚", "当前心境", "描述", "平静"],
                 ["角色.苏砚", "身体状况", "描述", "健康"],
             ], chapters={
-                "03_第01部/03_卷01/03_章0001": [
+                "03_第01部/03_卷01/0001": [
                     ["角色.苏砚", "当前心境", "描述", "愤怒", "1", "2026-01-01", "-"],
                     ["角色.苏砚", "身体状况", "描述", "左臂骨折", "1", "2026-01-01", "-"],
                 ],
@@ -157,7 +157,7 @@ class TestReplayIdempotent(unittest.TestCase):
             novel = make_novel(td, baseline_records=[
                 ["角色.苏砚", "内力值", "运算-数值", "100"],
             ], chapters={
-                "03_第01部/03_卷01/03_章0001": [
+                "03_第01部/03_卷01/0001": [
                     ["角色.苏砚", "内力值", "运算-数值", "-20", "1", "2026-01-01", "-"],
                 ],
             })
@@ -287,10 +287,10 @@ class TestChapterOpeners(unittest.TestCase):
             ["角色.柳禾", "身体状况", "描述", "肺痨晚期"],
             ["势力.黑石会", "与主角互动状态", "运算-枚举", "敌对"],
         ], chapters={
-            "03_第01部/03_卷01/03_章0001": [
+            "03_第01部/03_卷01/0001": [
                 ["角色.苏砚", "境界", "运算-枚举", "炼气一层", "1", "2026-01-01", "修改"],
             ],
-            "03_第01部/03_卷01/04_章0002": [],
+            "03_第01部/03_卷01/0002": [],
         })
         # 主角档案（供 protagonist_state_id）
         os.makedirs(os.path.join(novel, "01_设定"), exist_ok=True)
@@ -312,12 +312,12 @@ class TestChapterOpeners(unittest.TestCase):
             self.assertEqual(len(written), 2)
 
             # 章0001：无细纲 → 全量，且为「基线」（早于本章无履历）
-            o1 = open(os.path.join(novel, "05_工作区/03_第01部/03_卷01/03_章0001/02_状态/00_开篇状态.md")).read()
+            o1 = open(os.path.join(novel, "05_工作区/03_第01部/03_卷01/0001/02_状态/00_开篇状态.md")).read()
             self.assertIn("角色.苏砚 | 境界 | 运算-枚举 | 凡人", o1)   # 基线值，未折叠本章
             self.assertIn("未找到单章细纲", o1)
 
             # 章0002：有细纲，只留 苏砚 + 黑石会；苏砚境界已折叠章0001 → 炼气一层
-            o2 = open(os.path.join(novel, "05_工作区/03_第01部/03_卷01/04_章0002/02_状态/00_开篇状态.md")).read()
+            o2 = open(os.path.join(novel, "05_工作区/03_第01部/03_卷01/0002/02_状态/00_开篇状态.md")).read()
             self.assertIn("角色.苏砚 | 境界 | 运算-枚举 | 炼气一层", o2)
             self.assertNotIn("角色.柳禾", o2)      # 被出场对象清单裁掉
             self.assertIn("势力.黑石会", o2)
@@ -339,7 +339,7 @@ class TestChapterOpeners(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             novel = self._novel(td)
             # 章0003：工作区目录已建，但还没写履历
-            pending = os.path.join(novel, "05_工作区/03_第01部/03_卷01/05_章0003/02_状态")
+            pending = os.path.join(novel, "05_工作区/03_第01部/03_卷01/0003/02_状态")
             os.makedirs(pending, exist_ok=True)
 
             written = bss.write_chapter_openers(novel, verbose=False)
@@ -347,7 +347,7 @@ class TestChapterOpeners(unittest.TestCase):
             self.assertIn(opener, written)
 
             body = open(opener, encoding="utf-8").read()
-            self.assertTrue(body.startswith("# 本章开篇状态 · 03_第01部/03_卷01/05_章0003"))
+            self.assertTrue(body.startswith("# 本章开篇状态 · 03_第01部/03_卷01/0003"))
             self.assertIn("--write-chapter-openers 生成", body)      # 完整溯源注
             self.assertNotIn("开篇状态快照 · ..", body)              # 不是旧的坏抬头
             # 折叠了章0001（苏砚境界→炼气一层），无细纲 → 全量
@@ -727,11 +727,11 @@ class TestChapterDirAcceptsChapterRoot(unittest.TestCase):
             novel = make_novel(td, baseline_records=[
                 ["角色.苏砚", "内力值", "运算-数值", "100"],
             ], chapters={
-                "03_第01部/03_卷01/03_章0001": [
+                "03_第01部/03_卷01/0001": [
                     ["角色.苏砚", "内力值", "运算-数值", "-20", "1", "2026-01-01", "-"],
                 ],
             })
-            chap_root = os.path.join(novel, "05_工作区", "03_第01部", "03_卷01", "03_章0001")
+            chap_root = os.path.join(novel, "05_工作区", "03_第01部", "03_卷01", "0001")
 
             # 文档写法：本章目录本身
             r1 = self._run(novel, chap_root)
@@ -746,7 +746,7 @@ class TestChapterDirAcceptsChapterRoot(unittest.TestCase):
             novel = make_novel(td, baseline_records=[
                 ["角色.苏砚", "内力值", "运算-数值", "100"],
             ])
-            empty = os.path.join(novel, "05_工作区", "03_第01部", "03_卷01", "03_章0009")
+            empty = os.path.join(novel, "05_工作区", "03_第01部", "03_卷01", "0009")
             os.makedirs(empty, exist_ok=True)
             r = self._run(novel, empty)
             self.assertEqual(r.returncode, 1)

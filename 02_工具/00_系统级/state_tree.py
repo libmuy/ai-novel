@@ -525,7 +525,7 @@ CHAPTER_OPENER_FILENAME = "00_开篇状态.md"
 _REF_PREFIX_TO_STATE = {"人物": "角色", "势力": "势力", "物品": "物品",
                        "财务": "财务", "世界": "世界", "关系": "关系"}
 _CAST_CELL_RE = re.compile(r"@(主角|人物|势力|物品|财务|世界|关系)(?:\.\[([^\]]+)\])?")
-_CHAPTER_DIR_RE = re.compile(r"^(\d+_第\d+部)/(\d+_卷(\d+))/(\d+_章\d+|章\d+)$")
+_CHAPTER_DIR_RE = re.compile(r"^(\d+_第\d+部)/(\d+_卷(\d+))/(\d{4})$")
 
 
 def protagonist_state_id(novel_dir):
@@ -541,7 +541,7 @@ def protagonist_state_id(novel_dir):
 
 
 def plan_path_for_chapter(chapter_dir, novel_dir):
-    """章目录 `05_工作区/03_第01部/03_卷01/03_章0001` -> 单章细纲
+    """章目录 `05_工作区/03_第01部/03_卷01/0001` -> 单章细纲
     `03_规划/01_第01部/01_卷01/规划_卷01_章0001.md` 的绝对路径。不匹配返回 None。"""
     chapter_dir_abs = os.path.abspath(chapter_dir)
     if os.path.basename(chapter_dir_abs) == "02_状态":
@@ -551,8 +551,10 @@ def plan_path_for_chapter(chapter_dir, novel_dir):
     m = _CHAPTER_DIR_RE.match(rel)
     if not m:
         return None
-    part_dir, vol_dir, vol_num, chap_raw = m.group(1), m.group(2), m.group(3), m.group(4)
-    chap = chap_raw.split("_")[-1] if "_" in chap_raw else chap_raw
+    part_dir, vol_dir, vol_num, chap_num = m.group(1), m.group(2), m.group(3), m.group(4)
+    # 章工作区目录名本身已不带「章」字（纯 4 位数字），细纲文件名规范仍要求「章CCCC」，
+    # 这里要显式拼回去——不是 chap_raw 里剥出来的子串。
+    chap = f"章{chap_num}"
     part_clean = re.sub(r"^\d+_", "", part_dir)
     vol_clean = re.sub(r"^\d+_", "", vol_dir)
     # 尝试匹配 03_规划 下的目录
@@ -716,12 +718,12 @@ def baseline_dir(novel_dir):
     return os.path.join(novel_dir, BASELINE_SUBPATH)
 
 
-CHAPTER_REL_RE = re.compile(r"^(\d+)_第(\d+)部/(\d+)_卷(\d+)/(?:(\d+)_)?章(\d+)$")
+CHAPTER_REL_RE = re.compile(r"^(\d+)_第(\d+)部/(\d+)_卷(\d+)/(\d{4})$")
 
 
 def chapter_sort_key(changelog_path, novel_dir):
     """从履历路径解析 (部号, 卷号, 章号)。不符合规范即抛错，绝不静默排序。"""
-    # changelog_path 可能是 .../03_章0001/02_状态/01_状态履历.md 或 .../03_章0001/01_状态履历.md
+    # changelog_path 可能是 .../0001/02_状态/01_状态履历.md 或 .../0001/01_状态履历.md
     parent_dir = os.path.dirname(os.path.abspath(changelog_path))
     if os.path.basename(parent_dir) == "02_状态":
         chap_dir = os.path.dirname(parent_dir)
@@ -734,9 +736,9 @@ def chapter_sort_key(changelog_path, novel_dir):
     if not m:
         raise StateMergeError(
             f"章目录路径不符合规范: {WORKSPACE_DIRNAME}/{rel}\n"
-            f"应为 NN_第NN部/NN_卷NN/NN_章NNNN（例: 03_第01部/03_卷01/03_章0001）"
+            f"应为 NN_第NN部/NN_卷NN/CCCC（例: 03_第01部/03_卷01/0001）"
         )
-    _pp, part, _vp, vol, _cp, chap = m.groups()
+    _pp, part, _vp, vol, chap = m.groups()
     return (int(part), int(vol), int(chap))
 
 
@@ -911,8 +913,8 @@ def iter_workspace_changelogs(novel_dir):
 
 
 def chapter_rel_name(changelog_path, novel_dir):
-    """把 .../05_工作区/03_第01部/03_卷01/03_章0001/02_状态/01_状态履历.md
-    表示成 `03_第01部/03_卷01/03_章0001`（供 manifest 与报告用）。"""
+    """把 .../05_工作区/03_第01部/03_卷01/0001/02_状态/01_状态履历.md
+    表示成 `03_第01部/03_卷01/0001`（供 manifest 与报告用）。"""
     parent_dir = os.path.dirname(os.path.abspath(changelog_path))
     if os.path.basename(parent_dir) == "02_状态":
         chap_dir = os.path.dirname(parent_dir)

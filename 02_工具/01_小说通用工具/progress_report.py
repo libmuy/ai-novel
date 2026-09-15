@@ -201,7 +201,7 @@ def collect(novel_dir: Path) -> Report:
             c.outline = f
             c.declared_outline = lookup(declared, f, novel_dir)
 
-    for f in sorted((novel_dir / "10_正文").rglob("章*.md")):
+    for f in sorted((novel_dir / "10_正文").rglob("正文_卷*_章*.md")):
         m = re.search(r"章0*(\d+)", f.name)
         mv = re.search(r"卷0*(\d+)", str(f))
         mp = re.search(r"第0*(\d+)部", str(f))
@@ -213,10 +213,10 @@ def collect(novel_dir: Path) -> Report:
 
     ws = novel_dir / "05_工作区"
     if ws.is_dir():
-        for d in sorted(ws.rglob("*_章*")):
+        for d in sorted(ws.rglob("*_卷*/[0-9][0-9][0-9][0-9]")):
             if not d.is_dir():
                 continue
-            m = re.search(r"章0*(\d+)$", d.name)
+            m = re.fullmatch(r"(\d+)", d.name)
             mv = re.search(r"卷0*(\d+)", str(d))
             mp = re.search(r"第0*(\d+)部", str(d))
             if not m:
@@ -263,12 +263,12 @@ def collect(novel_dir: Path) -> Report:
         m2 = re.search(r"对象总数[:：]\s*(\d+)", txt)
         if m2:
             rep.state_objects = int(m2.group(1))
-    # 折叠标记形如 `03_第01部/03_卷01/03_章0001`，部/卷/章俱全。
+    # 折叠标记形如 `03_第01部/03_卷01/0001`，部/卷/章俱全。
     # 按 (部, 卷, 章) 元组比大小，而不是只比章号——跨卷章号是否全局连续，
     # 数据里还没定死（卷 2~4 目前只有【基础定位】），别替它假设。
     mk_p = re.search(r"第0*(\d+)部", rep.merged_upto)
     mk_v = re.search(r"卷0*(\d+)", rep.merged_upto)
-    mk_c = re.search(r"章0*(\d+)", rep.merged_upto)
+    mk_c = re.search(r"(\d+)$", rep.merged_upto)
     if mk_c is None:
         # 没有折叠记录（新书写 `__none__`），一章都还没并入
         for c in chapters.values():

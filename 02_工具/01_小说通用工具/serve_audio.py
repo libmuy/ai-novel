@@ -8,11 +8,11 @@
     /                首页——选「正文」「工作区」「规划」
     /text            正文：章节列表
     /text/<部>/<卷>/<章>          该章——选「读」或「听」
-    /text/<部>/<卷>/<章>/read     读：渲染 10_正文/…/章{C}.md（?raw=1 出纯文本）
+    /text/<部>/<卷>/<章>/read     读：渲染 10_正文/…/正文_卷VV_章{C}.md（?raw=1 出纯文本）
     /text/<部>/<卷>/<章>/listen   听：内嵌播放器
     /work            工作区：章节列表
     /work/<部>/<卷>/<章>          该章——选「读」或「听」
-    /work/<部>/<卷>/<章>/read     读：该章 05_工作区/…/章XXXX/ 文件浏览器
+    /work/<部>/<卷>/<章>/read     读：该章 05_工作区/…/CCCC/ 文件浏览器
                                   （?f=<相对路径> 看单个文件，.md 渲染成 HTML；
                                    &raw=1 出纯文本；页面有「复制原文」按钮）
     /work/<部>/<卷>/<章>/listen   听：同一份音频
@@ -50,7 +50,7 @@ from pathlib import Path
 from xml.sax.saxutils import escape as xml_escape
 
 _MP3_RE = re.compile(r"^章(\d+)(?:_场(\d+))?\.mp3$")
-_WS_CH_RE = re.compile(r"章(\d+)")
+_WS_CH_RE = re.compile(r"^(\d{4})$")
 _PUBDATE_ANCHOR = 1577836800  # 2020-01-01Z；feed 条目 pubDate 按章号合成，保证阅读顺序
 _TEXT_EXT = {".md", ".txt", ".json", ".jsonl", ".toml", ".csv"}
 _RENDER_CAP = 512 * 1024
@@ -160,7 +160,7 @@ def scan(novel_dir: Path) -> list[Entry]:
 
     # 正文
     for md in novel_dir.glob("10_正文/*/*/*.md"):
-        m = re.match(r"^章(\d+)\.md$", md.name)
+        m = re.match(r"^正文_卷\d+_章(\d+)\.md$", md.name)
         mp = re.search(r"第0*(\d+)部", str(md))
         mv = re.search(r"卷0*(\d+)", str(md))
         if m and mp and mv:
@@ -170,7 +170,7 @@ def scan(novel_dir: Path) -> list[Entry]:
     for d in novel_dir.glob("05_工作区/*/*/*"):
         if not d.is_dir():
             continue
-        m = _WS_CH_RE.search(d.name)
+        m = _WS_CH_RE.match(d.name)
         mp = re.search(r"第0*(\d+)部", str(d.parent.parent))
         mv = re.search(r"卷0*(\d+)", str(d.parent))
         if m and mp and mv:

@@ -141,16 +141,17 @@ def _resolve_targets(args):
         chdir = Path(args.chapter_dir).resolve()
         m_part = re.search(r"第0*(\d+)部", str(chdir))
         m_vol = re.search(r"卷0*(\d+)", str(chdir))
-        m_ch = re.search(r"章0*(\d+)", chdir.name)
+        m_ch = re.fullmatch(r"(\d+)", chdir.name)
         if not (m_part and m_vol and m_ch):
             raise TtsError(f"无法从 {chdir} 解析 部/卷/章 号")
         part, vol, ch = int(m_part.group(1)), int(m_vol.group(1)), int(m_ch.group(1))
         if len(chdir.parents) < 4:
             raise TtsError(f"{chdir} 层级不足，不像章工作区目录")
         novel_dir = chdir.parents[3]
-        hits = sorted(novel_dir.glob(f"10_正文/*第{part:02d}部*/*卷{vol:02d}*/章{ch:04d}.md"))
+        hits = sorted(novel_dir.glob(
+            f"10_正文/*第{part:02d}部*/*卷{vol:02d}*/正文_卷{vol:02d}_章{ch:04d}.md"))
         manuscript = hits[0] if hits else (
-            novel_dir / f"10_正文/01_第{part:02d}部/01_卷{vol:02d}/章{ch:04d}.md")
+            novel_dir / f"10_正文/01_第{part:02d}部/01_卷{vol:02d}/正文_卷{vol:02d}_章{ch:04d}.md")
         out_dir = chdir / "03_音频"
         stem = f"章{ch:04d}"
     else:

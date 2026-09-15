@@ -106,12 +106,12 @@ def _resolve_targets(args):
         chdir = Path(args.chapter_dir).resolve()
         m_part = re.search(r"第0*(\d+)部", str(chdir))
         m_vol = re.search(r"卷0*(\d+)", str(chdir))
-        m_ch = re.search(r"章0*(\d+)", chdir.name)
+        m_ch = re.fullmatch(r"(\d+)", chdir.name)
         if not (m_part and m_vol and m_ch):
             sys.exit(f"无法从 {chdir} 解析 部/卷/章 号")
         part, vol, ch = int(m_part.group(1)), int(m_vol.group(1)), int(m_ch.group(1))
         chapter_number = ch
-        # 05_工作区/03_第NN部/03_卷NN/03_章XXXX → 向上 4 层是小说目录
+        # 05_工作区/03_第NN部/03_卷NN/CCCC → 向上 4 层是小说目录
         novel_dir = chdir.parents[3]
         vol_s, ch_s = f"{vol:02d}", f"{ch:04d}"
 
@@ -120,8 +120,8 @@ def _resolve_targets(args):
             return hits[0] if hits else base
 
         manuscript = _glob1(
-            novel_dir / f"10_正文/01_第{part:02d}部/01_卷{vol_s}/章{ch_s}.md",
-            f"10_正文/*第{part:02d}部*/*卷{vol_s}*/章{ch_s}.md")
+            novel_dir / f"10_正文/01_第{part:02d}部/01_卷{vol_s}/正文_卷{vol_s}_章{ch_s}.md",
+            f"10_正文/*第{part:02d}部*/*卷{vol_s}*/正文_卷{vol_s}_章{ch_s}.md")
         outline = _glob1(
             novel_dir / f"03_规划/01_第{part:02d}部/01_卷{vol_s}/规划_卷{vol_s}_章{ch_s}.md",
             f"03_规划/*第{part:02d}部*/*卷{vol_s}*/规划_卷{vol_s}_章{ch_s}.md")

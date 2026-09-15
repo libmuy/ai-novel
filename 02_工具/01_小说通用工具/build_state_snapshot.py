@@ -84,7 +84,7 @@ def _emit_opener(novel_dir, state_dir, chap_name, records, prot, *, verbose=True
 def write_one_chapter_opener(chapter_dir, novel_dir=None, *, verbose=True):
     """物化单章 00_开篇状态.md（派生视图）。
 
-    chapter_dir 可为章工作区目录（`…/07_章0005`）或其 `02_状态` 子目录。
+    chapter_dir 可为章工作区目录（`…/0005`）或其 `02_状态` 子目录。
     第 N 章开篇状态 = 基线 ⊕ 折叠「排序严格早于本章」的全部章履历，再按本章
     细纲「## 出场对象」裁剪。
 
@@ -208,7 +208,7 @@ _FALLBACK_FIELDS = {
 
 
 def _chapter_number(chap_rel):
-    m = re.search(r"章(\d{3,4})", chap_rel)
+    m = re.search(r"(\d{3,4})$", chap_rel)
     return m.group(1) if m else "0000"
 
 

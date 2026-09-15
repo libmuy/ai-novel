@@ -281,11 +281,11 @@ class TestAppendRecordDegradedWarning(unittest.TestCase):
 class TestResolveTargetsChapterDir(unittest.TestCase):
     def _mk_novel(self, root: Path):
         for d in ["01_设定", "10_正文/01_第01部/01_卷01", "03_规划/01_第01部/01_卷01",
-                  "05_工作区/03_第01部/03_卷01/03_章0001/02_状态"]:
+                  "05_工作区/03_第01部/03_卷01/0001/02_状态"]:
             (root / d).mkdir(parents=True, exist_ok=True)
         (root / "01_设定/00_小说概念.md").write_text("# 概念", encoding="utf-8")
         (root / "01_设定/00_主角档案.md").write_text("# 主角", encoding="utf-8")
-        (root / "10_正文/01_第01部/01_卷01/章0001.md").write_text("正文", encoding="utf-8")
+        (root / "10_正文/01_第01部/01_卷01/正文_卷01_章0001.md").write_text("正文", encoding="utf-8")
         (root / "03_规划/01_第01部/01_卷01/规划_卷01_章0001.md").write_text("细纲", encoding="utf-8")
 
     def test_manuscript_mode(self):
@@ -295,13 +295,13 @@ class TestResolveTargetsChapterDir(unittest.TestCase):
             self._mk_novel(root)
 
             class A:
-                chapter_dir = str(root / "05_工作区/03_第01部/03_卷01/03_章0001")
+                chapter_dir = str(root / "05_工作区/03_第01部/03_卷01/0001")
                 manuscript = novel_dir = mode = record = None
             nd, mode, tgt, ref, rec, chapter_number = R._resolve_targets(A())
             self.assertEqual(nd, root.resolve())
             self.assertEqual(mode, "manuscript")
-            self.assertTrue(str(tgt).endswith("10_正文/01_第01部/01_卷01/章0001.md"))
-            self.assertTrue(str(rec).endswith("03_章0001/02_状态/02_正文校验记录.md"))
+            self.assertTrue(str(tgt).endswith("10_正文/01_第01部/01_卷01/正文_卷01_章0001.md"))
+            self.assertTrue(str(rec).endswith("0001/02_状态/02_正文校验记录.md"))
             self.assertIn("细纲", ref)
             self.assertIn("世界基本法则", ref)
             self.assertNotIn("本章开篇状态", ref)  # 没建这个文件时不该假装有
@@ -315,11 +315,11 @@ class TestResolveTargetsChapterDir(unittest.TestCase):
             root = Path(td) / "00_小说"
             root.mkdir()
             self._mk_novel(root)
-            opener = (root / "05_工作区/03_第01部/03_卷01/03_章0001/02_状态/00_开篇状态.md")
+            opener = (root / "05_工作区/03_第01部/03_卷01/0001/02_状态/00_开篇状态.md")
             opener.write_text("# 开篇状态\n关系.苏砚&马铁秤 概述：苏砚拒绝指认周莽。\n", encoding="utf-8")
 
             class A:
-                chapter_dir = str(root / "05_工作区/03_第01部/03_卷01/03_章0001")
+                chapter_dir = str(root / "05_工作区/03_第01部/03_卷01/0001")
                 manuscript = novel_dir = mode = record = None
             _, _, _, ref, _, _ = R._resolve_targets(A())
             self.assertIn("本章开篇状态", ref)
@@ -332,7 +332,7 @@ class TestResolveTargetsChapterDir(unittest.TestCase):
             self._mk_novel(root)
 
             class A:
-                chapter_dir = str(root / "05_工作区/03_第01部/03_卷01/03_章0001")
+                chapter_dir = str(root / "05_工作区/03_第01部/03_卷01/0001")
                 manuscript = novel_dir = record = None
                 mode = "outline"
             nd, mode, tgt, ref, rec, chapter_number = R._resolve_targets(A())

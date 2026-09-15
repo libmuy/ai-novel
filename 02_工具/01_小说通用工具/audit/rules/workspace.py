@@ -9,6 +9,8 @@ from ..models import Finding, Severity
 from ..engine import AuditRule
 from ..context import AuditContext
 
+_CHAPTER_SUBDIR_RE = re.compile(r"^(\d{4})$")
+
 BANNED_NAMES = [
     "00_全局",
     "历史回填",
@@ -48,6 +50,8 @@ class WorkspaceRule(AuditRule):
                     ))
 
         # 2. 检查子目录编号合规性（从00开始，无重复，连续不跳号，两位数字前缀）
+        #    章工作区目录（纯 4 位章节号，见 layout.py `_chapter_dirname`）是这条规则的
+        #    例外分支，见 _check_dir_numbering 内的拆分逻辑。
         self._check_dir_numbering(workspace_dir, novel_dir, findings)
 
         # 3. 检查 00_提示词 与 01_模型输出 的同名文件配对情况
@@ -62,12 +66,20 @@ class WorkspaceRule(AuditRule):
 
         # `.bak` 后缀是 merge_chapter_state.py / rebuild_global_state.py --backup 的写前备份
         # （gitignore 也忽略），不参与编号合规检查、也不往里递归。
-        subdirs = [d for d in current_dir.iterdir()
-                   if d.is_dir() and not d.name.startswith(".") and not d.name.endswith(".bak")]
-        if not subdirs:
+        all_subdirs = [d for d in current_dir.iterdir()
+                       if d.is_dir() and not d.name.startswith(".") and not d.name.endswith(".bak")]
+        if not all_subdirs:
             return
 
-        # 遍历所有直系子目录
+        # 章工作区目录是两位数字编号规则的例外：直接用纯 4 位章节号命名，不从 0 起、
+        # 也不要求连续（见 layout.py `_chapter_dirname`）——目录名在同一父目录下天然唯一，
+        # 无需再查重，从「其余目录」的两位数字/连续/从0 检查里摘出去即可。
+        chapter_subdirs = [d for d in all_subdirs if _CHAPTER_SUBDIR_RE.match(d.name)]
+        subdirs = [d for d in all_subdirs if d not in chapter_subdirs]
+
+        rel_parent = current_dir.relative_to(novel_dir)
+
+        # 遍历「其余目录」（去掉章目录后剩下的，通常是 00_提示词/01_模型输出/02_状态）
         pattern = re.compile(r"^(\d{2})_(.+)$")
         numbered_subdirs = []
         unformatted = []
@@ -79,8 +91,6 @@ class WorkspaceRule(AuditRule):
                 numbered_subdirs.append((num, d.name, d))
             else:
                 unformatted.append(d)
-
-        rel_parent = current_dir.relative_to(novel_dir)
 
         if unformatted:
             for d in unformatted:
@@ -145,8 +155,9 @@ class WorkspaceRule(AuditRule):
                         locations=[str(rel_parent)]
                     ))
 
-        # 递归检查子目录
-        for d in subdirs:
+        # 递归检查子目录（含章目录——章目录里的 00_提示词/01_模型输出/02_状态 仍要走
+        # 常规两位数字连续检查，只是章目录自身这一层不适用）
+        for d in all_subdirs:
             self._check_dir_numbering(d, novel_dir, findings)
 
     def _check_prompt_output_pairing(self, workspace_dir: Path, novel_dir: Path, findings: List[Finding]):

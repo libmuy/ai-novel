@@ -47,12 +47,12 @@ def _novel(td, outline_body, manuscript_status):
     (novel / "03_规划" / "01_第01部" / "01_卷01" / "规划_卷01_章0001.md").write_text(
         outline_body, encoding="utf-8")
     (novel / "10_正文" / "01_第01部" / "01_卷01").mkdir(parents=True, exist_ok=True)
-    (novel / "10_正文" / "01_第01部" / "01_卷01" / "章0001.md").write_text(
+    (novel / "10_正文" / "01_第01部" / "01_卷01" / "正文_卷01_章0001.md").write_text(
         "正文正文正文。", encoding="utf-8")
     (novel / "00_进度.md").write_text(
         "# 进度\n\n| 产出 | 状态 | 说明 |\n|---|---|---|\n"
         f"| 细纲 | `规划_卷01_章0001.md` | 定稿 |\n"
-        f"| 正文 | `章0001.md` | {manuscript_status} |\n",
+        f"| 正文 | `正文_卷01_章0001.md` | {manuscript_status} |\n",
         encoding="utf-8")
     return novel
 

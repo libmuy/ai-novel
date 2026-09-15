@@ -1116,5 +1116,5 @@ def _sliding_window(ctx: Ctx, todos: list[str]) -> str:
 
 def resolve_prev_manuscript(ctx: Ctx) -> Optional[Path]:
     L = ctx.layout
-    cand = L.manuscript.parent / f"章{L.chapter - 1:04d}.md"
+    cand = L.manuscript.parent / f"正文_卷{L.volume:02d}_章{L.chapter - 1:04d}.md"
     return cand if cand.exists() else None
