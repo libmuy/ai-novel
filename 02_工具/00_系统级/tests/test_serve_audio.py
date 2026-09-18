@@ -6,9 +6,10 @@ import sys
 import tempfile
 import threading
 import unittest
+import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
-from xml.etree import ElementTree as ET
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "01_小说通用工具"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -20,8 +21,8 @@ _MP3 = b"\xff\xf3\x60\xc4" + b"\x00" * 80000
 _MANUSCRIPT = "第一段。\n\n第二段。\n\n※\n\n第二场。\n"
 
 
-def _make_tree(tmp: Path, with_audio=True, with_ch2=True):
-    novel = tmp / "00_苍玄"
+def _make_tree(tmp: Path, name="00_苍玄", with_audio=True, with_ch2=True):
+    novel = tmp / name
     (novel / "10_正文" / "01_第01部" / "01_卷01").mkdir(parents=True)
     (novel / "10_正文" / "01_第01部" / "01_卷01" / "正文_卷01_章0001.md").write_text(_MANUSCRIPT, encoding="utf-8")
     ws1 = novel / "05_工作区" / "03_第01部" / "03_卷01" / "0001"
@@ -101,6 +102,35 @@ class TestScanPlanning(unittest.TestCase):
             self.assertEqual(len(vols), 0)
 
 
+class TestDiscoverNovels(unittest.TestCase):
+    def test_single_dir_is_single_novel(self):
+        with tempfile.TemporaryDirectory() as td:
+            novel = _make_tree(Path(td))
+            novels = S.discover_novels([novel])
+            self.assertEqual(len(novels), 1)
+            self.assertEqual(novels[0].slug, "苍玄")
+
+    def test_data_root_finds_children(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "01_小说数据"
+            root.mkdir()
+            _make_tree(root, name="00_苍玄")
+            _make_tree(root, name="01_长夜将明")
+            novels = S.discover_novels([root])
+            self.assertEqual(sorted(n.slug for n in novels), ["苍玄", "长夜将明"])
+
+    def test_slug_collision_falls_back_to_dirname(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "01_小说数据"
+            root.mkdir()
+            _make_tree(root, name="00_苍玄")
+            _make_tree(root, name="01_苍玄")
+            novels = S.discover_novels([root])
+            slugs = sorted(n.slug for n in novels)
+            self.assertIn("苍玄", slugs)
+            self.assertIn("01_苍玄", slugs)
+
+
 class TestRenderProse(unittest.TestCase):
     def test_scene_break_and_paragraphs(self):
         h = S.render_prose(_MANUSCRIPT)
@@ -148,32 +178,36 @@ class TestRenderMarkdown(unittest.TestCase):
 class TestPages(unittest.TestCase):
     def test_home_and_lists(self):
         with tempfile.TemporaryDirectory() as td:
-            entries = S.scan(_make_tree(Path(td)))
-            plan_root, plan_vols = S.scan_planning(Path(td) / "00_苍玄")
-            home = S.page_home(entries, "苍玄", "http://p:8765", plan_root, plan_vols).decode()
+            novel_dir = _make_tree(Path(td))
+            n = S.Novel(novel_dir, "苍玄", "苍玄")
+            ctx = S.Ctx(n, [n], "", "home")
+            entries = n.entries
+
+            home = S.page_novel_home(ctx).decode()
             self.assertIn("href='/text'", home)
             self.assertIn("href='/work'", home)
             self.assertIn("href='/plan'", home)
-            self.assertIn("http://p:8765/feed.xml", home)
 
-            tl = S.page_list(entries, "苍玄", "text").decode()
+            tl = S.page_list(entries, ctx, "text").decode()
             self.assertIn("/text/1/1/1/read", tl)
             self.assertIn("/text/1/1/1/listen", tl)
             self.assertNotIn("/text/1/1/2/", tl)  # ch2 无正文 → 不在正文列表
 
-            wl = S.page_list(entries, "苍玄", "work").decode()
+            wl = S.page_list(entries, ctx, "work").decode()
             self.assertIn("/work/1/1/1/read", wl)
             self.assertIn("/work/1/1/2/read", wl)   # ch2 有工作区
             self.assertIn("class=off>听", wl)       # ch2 无音频 → 听禁用
 
-    def test_feed_valid(self):
+    def test_root_page_is_shelf_when_multi_novel(self):
         with tempfile.TemporaryDirectory() as td:
-            entries = S.scan(_make_tree(Path(td)))
-            root = ET.fromstring(S.render_feed(entries, "苍玄", "http://p:8765"))
-            encs = root.findall(".//item/enclosure")
-            self.assertEqual(len(encs), 1)
-            self.assertEqual(encs[0].get("url"), "http://p:8765/audio/1/1/1.mp3")
-            self.assertEqual(int(encs[0].get("length")), len(_MP3))
+            root = Path(td) / "01_小说数据"
+            root.mkdir()
+            _make_tree(root, name="00_苍玄")
+            _make_tree(root, name="01_长夜将明")
+            novels = S.discover_novels([root])
+            body = S.page_root(novels).decode()
+            for n in novels:
+                self.assertIn(f"/n/{n.slug}/", body)
 
 
 class TestMp3Duration(unittest.TestCase):
@@ -188,10 +222,9 @@ class TestHttp(unittest.TestCase):
     def setUp(self):
         self.td = tempfile.TemporaryDirectory()
         novel = _make_tree(Path(self.td.name))
-        plan_root, plan_vols = S.scan_planning(novel)
         self.httpd = S.ThreadingHTTPServer(
             ("127.0.0.1", 0),
-            S.make_handler(novel, "苍玄", None, plan_root, plan_vols))
+            S.make_handler([S.Novel(novel, "苍玄", "苍玄")]))
         self.port = self.httpd.server_address[1]
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
 
@@ -201,11 +234,13 @@ class TestHttp(unittest.TestCase):
         self.td.cleanup()
 
     def _get(self, path, headers=None):
+        # 浏览器发请求前会自动把非 ASCII 路径段转成百分号编码；urlopen 不会，手动补上。
+        path = urllib.parse.quote(path, safe="/?=&%")
         req = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}", headers=headers or {})
         return urllib.request.urlopen(req, timeout=5)
 
     def test_routes(self):
-        for p in ("/", "/text", "/work", "/plan",
+        for p in ("/", "/text", "/work", "/plan", "/cmd",
                   "/text/1/1/1", "/work/1/1/1", "/text/1/1/1/listen",
                   "/plan/1/1"):
             with self._get(p) as r:
@@ -271,13 +306,98 @@ class TestHttp(unittest.TestCase):
         except urllib.error.HTTPError as e:
             self.assertEqual(e.code, 404)
 
-    def test_audio_range_and_feed(self):
+    def test_audio_range(self):
         with self._get("/audio/1/1/1.mp3", {"Range": "bytes=10-59"}) as r:
             self.assertEqual(r.status, 206)
             self.assertEqual(r.headers["Content-Range"], f"bytes 10-59/{len(_MP3)}")
             self.assertEqual(len(r.read()), 50)
-        with self._get("/feed.xml") as r:
-            self.assertIn("rss+xml", r.headers["Content-Type"])
+
+    def test_feed_removed(self):
+        try:
+            self._get("/feed.xml")
+            self.fail("expected 404")
+        except urllib.error.HTTPError as e:
+            self.assertEqual(e.code, 404)
+
+    def test_cmd_page(self):
+        # 已有存档（章 1 有 00_提示词/01_正文生成.md，任务名「正文」）
+        with self._get("/cmd?kind=正文&ch=1") as r:
+            body = r.read().decode()
+            self.assertIn("已生成", body)
+            self.assertIn("提示词", body)
+        # 没有存档 → 落到「未生成 + 命令」分支
+        with self._get("/cmd?kind=细纲&ch=1") as r:
+            body = r.read().decode()
+            self.assertIn("未生成", body)
+            self.assertIn("build_prompt.py", body)
+
+    def test_static_assets(self):
+        with self._get("/static/nocturne.css") as r:
+            self.assertEqual(r.status, 200)
+            self.assertIn("text/css", r.headers["Content-Type"])
+        try:
+            self._get("/static/../serve_audio.py")
+            self.fail("expected 404")
+        except urllib.error.HTTPError as e:
+            self.assertEqual(e.code, 404)
+
+
+class TestMultiNovel(unittest.TestCase):
+    def setUp(self):
+        self.td = tempfile.TemporaryDirectory()
+        root = Path(self.td.name) / "01_小说数据"
+        root.mkdir()
+        _make_tree(root, name="00_苍玄")
+        _make_tree(root, name="01_长夜将明", with_audio=False)
+        self.novels = S.discover_novels([root])
+        self.httpd = S.ThreadingHTTPServer(("127.0.0.1", 0), S.make_handler(self.novels))
+        self.port = self.httpd.server_address[1]
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+
+    def tearDown(self):
+        self.httpd.shutdown()
+        self.httpd.server_close()
+        self.td.cleanup()
+
+    def _get(self, path):
+        path = urllib.parse.quote(path, safe="/?=&%")
+        return urllib.request.urlopen(f"http://127.0.0.1:{self.port}{path}", timeout=5)
+
+    def test_root_is_shelf(self):
+        with self._get("/") as r:
+            body = r.read().decode()
+            self.assertIn("/n/苍玄/", body)
+            self.assertIn("/n/长夜将明/", body)
+
+    def test_prefixed_routes_dont_cross_novels(self):
+        with self._get("/n/苍玄/text") as r:
+            self.assertIn("/n/苍玄/text/1/1/1/read", r.read().decode())
+        with self._get("/n/长夜将明/text") as r:
+            body = r.read().decode()
+            self.assertIn("/n/长夜将明/text/1/1/1/read", body)
+
+    def test_unprefixed_routes_serve_default_novel(self):
+        # 默认本 = 按 slug 排序第一本 = 长夜将明（'长' < '苍' 按 Unicode 码位不保证，
+        # 所以只断言无前缀路由与 /n/<默认本 slug>/ 内容一致，不假设具体是谁）
+        default_slug = self.novels[0].slug
+        with self._get("/text") as r:
+            unprefixed = r.read().decode()
+        with self._get(f"/n/{default_slug}/text") as r:
+            prefixed = r.read().decode()
+        self.assertIn("1/1/1/read", unprefixed)
+        self.assertIn(default_slug, prefixed)
+
+    def test_unknown_slug_404(self):
+        try:
+            self._get("/n/不存在的书/text")
+            self.fail("expected 404")
+        except urllib.error.HTTPError as e:
+            self.assertEqual(e.code, 404)
+
+    def test_audio_reachable_via_prefix(self):
+        # 苍玄有配音，长夜将明没有（with_audio=False）——直接指名书，不依赖默认本是谁
+        with self._get("/n/苍玄/audio/1/1/1.mp3") as r:
+            self.assertEqual(r.status, 200)
 
 
 if __name__ == "__main__":

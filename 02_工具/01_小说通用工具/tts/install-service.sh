@@ -5,10 +5,12 @@
 #
 # 选项：
 #   --novel-dir PATH  要服务的小说目录，默认 <repo>/01_小说数据/00_苍玄
+#                     可改传 <repo>/01_小说数据 一次开全部小说（serve_audio.py
+#                     自动发现，侧边栏可切书），不必再为每本书起独立实例
 #   --port N          默认 8765
 #   --host ADDR       默认 0.0.0.0（同局域网可访问；无鉴权）
 #   --user NAME       跑服务的用户，默认 $SUDO_USER，否则当前用户
-#   --name SUFFIX     装成 serve-audio-<SUFFIX>.service（多本小说各占一个端口）
+#   --name SUFFIX     装成 serve-audio-<SUFFIX>.service（仍想并行跑多个独立服务时用）
 #   --uninstall       停用并删除对应 unit
 #
 # 卸载：sudo bash …/install-service.sh --uninstall [--name SUFFIX]
@@ -72,7 +74,6 @@ systemctl --no-pager --full status "$UNIT" | sed -n '1,10p' || true
 echo "==================================================="
 IP="$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++)if($i=="src"){print $(i+1);exit}}')"
 echo "unit   : $UNIT  ($DEST)"
-echo "播放页 : http://${IP:-<pi-ip>}:$PORT/"
-echo "播客RSS: http://${IP:-<pi-ip>}:$PORT/feed.xml"
+echo "审查台 : http://${IP:-<pi-ip>}:$PORT/"
 echo "日志   : journalctl -u $UNIT -f"
 echo "重启   : sudo systemctl restart $UNIT"
