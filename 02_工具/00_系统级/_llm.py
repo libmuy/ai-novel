@@ -75,6 +75,10 @@ class LlmConfig:
     backend: str = "auto"  # "http" | "opencode" | "auto"
     opencode_models: list = field(default_factory=lambda: list(_OPENCODE_MODELS))
     opencode_timeout: int = 300
+    # 思考模式开关（Qwen3 系等「先推理后作答」的模型）：None=不发该参数（默认，兼容各家端点）；
+    # False=经 chat_template_kwargs 关闭思考——否则推理内容会耗尽 max_tokens / 超时、正文为空，
+    # 冷读表现为「输出非预期 JSON」。
+    enable_thinking: bool | None = None
 
 
 def load_llm_config(tools_dir=None):
@@ -121,6 +125,7 @@ def load_llm_config(tools_dir=None):
         backend=str(data.get("backend", "auto")),
         opencode_models=list(data.get("opencode_models") or _OPENCODE_MODELS),
         opencode_timeout=int(data.get("opencode_timeout", 300)),
+        enable_thinking=(None if data.get("enable_thinking") is None else bool(data["enable_thinking"])),
     )
 
 
@@ -225,6 +230,8 @@ def _http_chat(cfg, system, user, *, json_mode=True):
         "temperature": cfg.temperature,
         "max_tokens": cfg.max_tokens,
     }
+    if cfg.enable_thinking is not None:
+        payload_body["chat_template_kwargs"] = {"enable_thinking": cfg.enable_thinking}
     if json_mode:
         payload_body["response_format"] = {"type": "json_object"}
     body = json.dumps(payload_body).encode("utf-8")

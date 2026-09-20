@@ -27,6 +27,15 @@ class TestExtractJsonObj(unittest.TestCase):
 
 
 class TestPriorFindings(unittest.TestCase):
+    def test_prior_not_injected_by_default(self):
+        """默认不注入历轮发现（评审器会回声旧清单，章0007 教训）；--with-prior 才注入。"""
+        with tempfile.TemporaryDirectory() as td:
+            rec = Path(td) / "02_正文校验记录.md"
+            rec.write_text("## 冷读评审 · x\n\n- 🟡 [矛盾] 某处 — 一个足够长的历史问题描述文字\n", encoding="utf-8")
+            self.assertEqual(R._prior_for_prompt(rec, with_prior=False), [])
+            self.assertTrue(R._prior_for_prompt(rec, with_prior=True))
+            self.assertEqual(R._prior_for_prompt(None, with_prior=True), [])
+
     def test_extracts_and_dedupes(self):
         with tempfile.TemporaryDirectory() as td:
             rec = Path(td) / "02_正文校验记录.md"

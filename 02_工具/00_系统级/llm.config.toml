@@ -33,6 +33,9 @@ api_key_env = "OPENAI_API_KEY"
 timeout = 120
 max_tokens = 4096
 temperature = 0.2
+# 本地 Qwen3 是思考模型：不关思考，推理内容会耗尽 max_tokens / 超时，冷读报「输出非预期 JSON」。
+# 换成不带思考模式的端点时删掉这行（缺省=不发该参数）。
+enable_thinking = false
 
 # opencode 后端可选覆盖（缺省用 _llm.py 内置的免费模型列表，按顺序试）：
 # opencode_models = ["opencode/mimo-v2.5-free", "opencode/nemotron-3-ultra-free"]

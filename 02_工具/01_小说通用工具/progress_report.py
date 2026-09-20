@@ -39,6 +39,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+import record_seal
+
 DERIVED_REL = "05_工作区/02_状态/05_进度派生视图.md"
 PROGRESS_REL = "00_进度.md"
 SYNC_REL = "05_工作区/02_状态/01_最新状态/00_同步状态.md"
@@ -57,6 +59,13 @@ def han_count(text: str) -> int:
     body = "\n".join(l for l in text.splitlines() if not l.strip().startswith("#"))
     return len(_HAN_RE.findall(body))
 
+
+# 冷读记录封印（record_seal.py）之前，脚本写的历史记录没有校验码，也有过手写的冷读节；
+# 这些章按「遗留」继续计数，章号超过下面的上限则必须是脚本封印过的记录（PROGRESS007）。
+# 正文：章0007 的手写「冷读」曾蒙混过关，所以正文遗留宽限到章0006；细纲：章0007 已经
+# 完成了带指纹的脚本冷读，宽限到章0007。
+LEGACY_COLD_MAX_CHAPTER_MANUSCRIPT = 6
+LEGACY_COLD_MAX_CHAPTER_OUTLINE = 7
 
 _ANCHOR_QUOTE_RE = re.compile(r"「([^」]+)」")
 _ANCHOR_LINE_RE = re.compile(r"^[\s→]*锚点[:：]")  # 只认真正的「→ 锚点：」行，
@@ -82,7 +91,13 @@ def stale_landing_anchors(landing_check_text: str, manuscript_text: str) -> list
             continue  # 只处理真正的「→ 锚点：」行——排除文件头说明行和 bullet 正文里顺带提到"锚点"的情况
         if "❌未落地" in s or "豁免" in s:
             continue
-        for q in _ANCHOR_QUOTE_RE.findall(s):
+        quotes = _ANCHOR_QUOTE_RE.findall(s)
+        if not quotes and "〔待填" not in s:
+            # 锚点行里一个「」引号都没有（如改用英文引号 / 不加引号）：校验器无法核对，
+            # 按幽灵锚点处理——否则换个引号写法就能整条绕过 PROGRESS006。
+            stale.append("〔锚点必须用「」括起〕" + s[:40])
+            continue
+        for q in quotes:
             parts = [p for p in (_WS_RE.sub("", seg) for seg in _ANCHOR_ELISION_RE.split(q)) if p]
             if parts and all(p in norm_ms for p in parts):
                 continue
@@ -100,7 +115,9 @@ class Chapter:
     chapter_ws: Path | None = None
     words: int = 0
     cold_rounds: int = 0        # 正文校验记录里 `## 冷读…` 分节数（标题命名不统一，非逻辑轮次）
-    outline_cold_rounds: int = 0  # 细纲对照记录里 `## 冷读…` 分节数
+    outline_cold_rounds: int = 0  # 细纲对照记录里被认可的 `## 冷读…` 分节数（脚本封印，或宽限内的遗留记录）
+    cold_rejected: list[str] = field(default_factory=list)          # 正文校验记录里不被认可的冷读节
+    outline_cold_rejected: list[str] = field(default_factory=list)  # 细纲对照记录里不被认可的冷读节
     revision_rounds: int = 0
     has_changelog: bool = False
     has_opener: bool = False
@@ -228,12 +245,14 @@ def collect(novel_dir: Path) -> Report:
             c.has_opener = (st / "00_开篇状态.md").exists()
             rec = st / "02_正文校验记录.md"
             if rec.exists():
-                c.cold_rounds = len(re.findall(
-                    r"^##\s*冷读", rec.read_text(encoding="utf-8", errors="ignore"), re.M))
+                c.cold_rounds, c.cold_rejected = record_seal.count_cold_rounds(
+                    rec.read_text(encoding="utf-8", errors="ignore"), c.number,
+                    LEGACY_COLD_MAX_CHAPTER_MANUSCRIPT)
             orec = st / "03_细纲对照记录.md"
             if orec.exists():
-                c.outline_cold_rounds = len(re.findall(
-                    r"^##\s*冷读", orec.read_text(encoding="utf-8", errors="ignore"), re.M))
+                c.outline_cold_rounds, c.outline_cold_rejected = record_seal.count_cold_rounds(
+                    orec.read_text(encoding="utf-8", errors="ignore"), c.number,
+                    LEGACY_COLD_MAX_CHAPTER_OUTLINE)
             if pr.is_dir():
                 c.revision_rounds = len(list(pr.glob("01_正文生成_修订*.md")))
 
@@ -324,7 +343,7 @@ def reconcile(novel_dir: Path, declared: dict[str, str], rep: Report) -> list[tu
         if c.declared_outline == "定稿" and c.outline_cold_rounds == 0:
             out.append(("error", "PROGRESS003",
                         f"{c.cid} 细纲标「定稿」，但无冷读记录"
-                        f"（`02_状态/03_细纲对照记录.md` 缺失或无 `## 冷读` 分节）——"
+                        f"（`02_状态/03_细纲对照记录.md` 缺失，或没有被认可的 `## 冷读` 节——手写的不算，见 PROGRESS007）——"
                         f"细纲门禁比正文严，`review_manuscript.py --mode outline` 冷读循环未跑就转定稿即伪造前置"))
         elif c.declared_outline == "待校验" and c.outline_cold_rounds == 0:
             out.append(("warning", "PROGRESS003",
@@ -341,11 +360,20 @@ def reconcile(novel_dir: Path, declared: dict[str, str], rep: Report) -> list[tu
             if c.cold_rounds == 0:
                 out.append(("error", "PROGRESS003",
                             f"{c.cid} 正文标「定稿」，但无冷读记录"
-                            f"（`02_状态/02_正文校验记录.md` 无 `## 冷读` 分节）——"
+                            f"（`02_状态/02_正文校验记录.md` 缺失，或没有被认可的 `## 冷读` 节——手写的不算，见 PROGRESS007）——"
                             f"「定稿」＝校验通过，冷读循环未跑就转定稿即伪造前置"))
         elif c.declared_manuscript == "待校验" and c.cold_rounds == 0:
             out.append(("warning", "PROGRESS003",
                         f"{c.cid} 正文标「待校验」，还没有冷读记录——校验循环（`review_manuscript.py`）尚未开始"))
+
+        # PROGRESS007：有「冷读」节，但不是脚本写的（无校验码 / 校验不符 / 指纹是占位符 / 无评审器）。
+        #   这类手写记录不计入冷读轮次——否则「记录说做了、实际没做」能蒙混过关。
+        for label, rej in (("正文校验记录", c.cold_rejected), ("细纲对照记录", c.outline_cold_rejected)):
+            if rej:
+                out.append(("error", "PROGRESS007",
+                            f"{c.cid} {label} 有 {len(rej)} 节「冷读」不被认可（不计入冷读轮次）：{'；'.join(rej[:2])}"
+                            f"——冷读记录必须由 `review_manuscript.py` 写入（带记录校验码与真实指纹）；"
+                            f"手写的过程记录请用「分诊」「复核」等标题，不要冒用「冷读」标题"))
 
         # PROGRESS005：细纲落地核对表（步骤 3.5）缺失或仍有未锚定项
         if c.declared_manuscript == "定稿":

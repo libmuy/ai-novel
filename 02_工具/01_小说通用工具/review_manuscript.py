@@ -46,6 +46,7 @@ from pathlib import Path
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE))
 sys.path.insert(0, str(_HERE.parent / "00_系统级"))
+import record_seal  # noqa: E402  冷读记录封印（进度门禁凭校验码判断记录是脚本写的）
 
 DEFAULT_CONFIG = _HERE.parent / "00_系统级" / "review.config.toml"
 
@@ -326,6 +327,17 @@ def _prior_findings(record_path, limit: int = 40) -> list:
     return out[-limit:]
 
 
+def _prior_for_prompt(record_path, with_prior: bool) -> list:
+    """默认不把历轮发现注入评审器提示词。
+
+    2026-09-20 章0007 教训：注入「请确认是否已解决」的旧清单后，评审器（mimo / 本地千问）
+    没有去读现稿，而是把旧清单原样回声——报出的「北段不说」「靴尖碰到第二排的绳」在现稿里
+    早已不存在，还谎称「只有一次内视」。fresh 重读才是「换一批模型独立冷读」的本意；
+    历轮问题是否已修，由主 Agent 分诊时对照旧清单核实。确需回归确认再加 `--with-prior`。
+    """
+    return _prior_findings(record_path) if (with_prior and record_path) else []
+
+
 def _read(p) -> str:
     try:
         return Path(p).read_text(encoding="utf-8")
@@ -368,6 +380,9 @@ def main():
     ap.add_argument("--passes", choices=["1", "2", "both"])
     ap.add_argument("--record")
     ap.add_argument("--no-write", action="store_true")
+    ap.add_argument("--with-prior", action="store_true",
+                     help="把历轮已提出的发现注入评审器提示词做「回归确认」（默认不注入：评审器会回声旧清单"
+                          "而不是读现稿，见 `_prior_for_prompt` 注释）")
     ap.add_argument("--allow-unchanged", action="store_true",
                      help="目标文件与上一轮冷读时指纹相同也照跑（默认拒绝——多半是忘了"
                           "落位修补稿；确实要对同一份内容重跑才加这个）")
@@ -404,7 +419,7 @@ def main():
     else:
         cl1, cl2 = CHECKLIST_PASS1, CHECKLIST_PASS2
 
-    prior = _prior_findings(record_path) if record_path else []
+    prior = _prior_for_prompt(record_path, args.with_prior)
 
     jobs = []
     if passes in ("1", "both"):
@@ -504,7 +519,7 @@ def main():
 def _append_record(path: Path, result: dict):
     path.parent.mkdir(parents=True, exist_ok=True)
     ts = _dt.datetime.now().strftime("%Y-%m-%d %H:%M")
-    lines = [f"\n\n---\n\n## 冷读评审 · {ts}\n",
+    lines = [f"## 冷读评审 · {ts}\n",
              f"> 脚本：`review_manuscript.py`（{result['mode']} / {result['passes']} 遍）",
              f"> 评审器：{', '.join(result['critics_used']) or '（无）'}",
              f"> 目标文件指纹：{result.get('fingerprint', '?')}",
@@ -549,8 +564,10 @@ def _append_record(path: Path, result: dict):
         lines.append(pf["report"])
         lines.append("```")
     lines.append("\n> 下一步：主 Agent 分诊 + 分级 + 写外科手术式修改提示词（≤3 轮循环）。")
+    body = "\n".join(lines)
+    # 封印：进度门禁凭这一行判断本节是脚本写的、没被改过（见 record_seal.py）
     with open(path, "a", encoding="utf-8") as fh:
-        fh.write("\n".join(lines) + "\n")
+        fh.write("\n\n---\n\n" + body + "\n" + record_seal.seal_line(body) + "\n")
 
 
 if __name__ == "__main__":

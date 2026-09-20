@@ -53,6 +53,28 @@ class TestJsonModeSwitch(unittest.TestCase):
         _out, body = self._capture_body(json_mode=True)
         self.assertEqual(body.get("response_format"), {"type": "json_object"})
 
+    def _capture_with_cfg(self, cfg):
+        seen = {}
+
+        def fake_urlopen(req, timeout=None):
+            seen["body"] = json.loads(req.data.decode("utf-8"))
+            return _FakeResp(json.dumps({"choices": [{"message": {"content": "x"}}]}))
+
+        orig = _llm.urllib.request.urlopen
+        _llm.urllib.request.urlopen = fake_urlopen
+        try:
+            _llm.chat(cfg, "s", "u")
+        finally:
+            _llm.urllib.request.urlopen = orig
+        return seen["body"]
+
+    def test_enable_thinking_default_not_sent(self):
+        self.assertNotIn("chat_template_kwargs", self._capture_with_cfg(_mk_cfg()))
+
+    def test_enable_thinking_false_sent_as_template_kwarg(self):
+        body = self._capture_with_cfg(_mk_cfg(enable_thinking=False))
+        self.assertEqual(body.get("chat_template_kwargs"), {"enable_thinking": False})
+
     def test_json_mode_false_omits_response_format(self):
         out, body = self._capture_body(json_mode=False)
         self.assertNotIn("response_format", body)
