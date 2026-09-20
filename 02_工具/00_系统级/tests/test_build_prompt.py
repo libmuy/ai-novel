@@ -1323,8 +1323,11 @@ class TestManifestGolden(TestAssemble):
     #   `正文_卷VV_章CCCC.md`（与单章细纲 `规划_卷VV_章CCCC.md` 同形状，见 layout.py
     #   `resolve()`）。两处都会原样出现在渲染出的提示词「落位目标」「产出保存文件名」
     #   「提示词存档」等行里，MANUSCRIPT 与 OUTLINE 哈希均变。
+    # 2026-09-20（钩子规则改写）：`00_通用写作规则.md` 3.3「结尾钩子规则」改写（取消「每3章至少
+    #   2重1轻」，改「每章必有钩子 / 强度对齐事件 / 卷级节奏」），细纲提示词内联的
+    #   `00_通用写作规则_生成版.md` 随之变化——只有 OUTLINE 哈希变；MANUSCRIPT 走红线包，不受影响。
     GOLDEN_MANUSCRIPT = "257fedb5ad1a31dfb3a15ee92e4ce05708f0bb80c4088a6af031b922463a705b"
-    GOLDEN_OUTLINE = "efe0b100ab63271dfacccb8820f1a351aa532150746b4caf745058681700b37a"
+    GOLDEN_OUTLINE = "b1d528aa01e125356ebf39b315455dfb8c7e6bc0485d047029de9bd38a6cc7c7"
 
     def _hash(self, text):
         import hashlib

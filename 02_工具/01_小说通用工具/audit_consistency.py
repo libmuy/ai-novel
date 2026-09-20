@@ -40,6 +40,8 @@ from audit.rules.enum_domain import EnumDomainRule
 from audit.rules.db_chapter import DbChapterRule
 from audit.rules.redline import RedlineRule
 from audit.rules.card_sections import CardSectionsRule
+from audit.rules.card_plot import CardPlotRule
+from audit.rules.hook_rhythm import HookRhythmRule
 
 
 def load_field_vocab(novel_dir: Path):
@@ -83,6 +85,8 @@ def get_default_engine(novel_dir: Path) -> AuditEngine:
     engine.register_rule(DbChapterRule())
     engine.register_rule(RedlineRule())
     engine.register_rule(CardSectionsRule())
+    engine.register_rule(CardPlotRule())
+    engine.register_rule(HookRhythmRule())
     return engine
 
 
