@@ -59,14 +59,17 @@
 |---|---|---|
 | `progress_report.py` | 进度派生视图（可观测事实）＋ 与 `00_进度.md` 声明的成熟度对账 | 技能 `01_项目状态审计.md`「进度表对账」节 |
 | `build_prompt.py` | 按六段骨架拼装自包含的云端提示词（单章细纲 / 正文），含前置门禁与内部标识自检；内联清单按 `04_提示词/任务输入清单.toml` | 技能 `10_提示词拼装.md` |
+| `prune_character_sheet.py` | 按当前卷号切片剪裁主角档案，生成 `01_设定/00_主角档案_当前阶段.md`；`build_prompt.py` 的 PREPARE 阶段自动调用，一般不单独跑 | `--help`；调用方见 `build_prompt.py` |
 | `run_prompt.py` | 把 `build_prompt.py` 拼好的提示词存档（含修订轮）直接喂**本地** llama.cpp 端点，产出按同名配对落 `01_模型输出/`；强制 http、不降级 opencode，能发现截断/空产出，参数按调用覆盖、不改 `llm.config.toml` | `--help`；实测基线见苍玄工作区 `05_工作区/01_模型输出/` 下的《本地模型能力基线》 |
 | `build_prompt_manifest.py` | 从 `04_提示词/任务输入清单.toml`（机读）派生人读视图 `任务输入清单.md`（`RULE009` 同步守护） | 技能 `01_项目状态审计.md`「规则层审计」节 |
 | `audit_consistency.py` | 小说数据的确定性一致性审查（引用/索引/状态/伏笔/禁用词/工作区规范/卡片区块） | 技能 `01_项目状态审计.md`（含**规则代码目录**与局限说明） |
 | `build_rule_slices.py` | 按 `<!-- slice: -->` 标记从 `00_通用写作规则.md` 逐字切出生成版/校验版 | 技能 `01_项目状态审计.md`「规则层审计」节 |
 | `audit_rules.py` | **规则层自身**的一致性审查（死链/索引计数/技能索引/派生切片/权威位置表/重复规范正文/工具路径常量） | 同上技能「规则层审计」节；豁免登记在 `rules_audit.config.toml` |
 | `redline_stamp.py` | 给 `01_设定/00_红线包.md` §八 上游表补/校指纹列（蒸馏视图漂移守护，配合审计 `REDLINE001`） | 技能 `01_项目状态审计.md`「红线包蒸馏视图守护」节 |
+| `auto_link_placeholders.py` | 批量把 `@类型.[TODO-xxx]` 占位符回补为定稿实名引用，同步勾选文末【待创建条目】 | `--help`（未接入任何技能文档，按需直接跑，用前先 `--dry-run` 看替换清单） |
 | `check.sh` | 提交前一键三关：单元测试 + 规则层审计 + 各小说数据审计 | `--help` |
 | `review_manuscript.py` | 正文/细纲的多模型独立对抗性冷读 | 技能 `04_单章质量验收.md` |
+| `record_seal.py` | 冷读记录「封印」库（无 CLI，供 `review_manuscript.py`/`progress_report.py`/审计规则调用）：写记录时追加校验码，`PROGRESS007` 靠它识别手写/伪造的冷读节 | 文件内注释 |
 | `build_landing_checklist.py` | 从单章细纲抽 beat/资源/伏笔/钩子/道义/突破代价，生成「细纲落地核对」待锚定清单（步骤 3.5 的确定性助手，配合审计 `PROGRESS005`） | 技能 `04_单章质量验收.md` |
 | `merge_chapter_state.py` | 章末把本章履历折叠进最新状态 | 技能 `03_章节状态对账.md` |
 | `rebuild_global_state.py` | 改早期章节后从基线全量重折 | 技能 `06_章节回溯修改.md` |
