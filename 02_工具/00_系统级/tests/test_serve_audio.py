@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """serve_audio.py 的离线单元测试（含本地回环 HTTP 请求）。"""
+import json
 import os
 import sys
 import tempfile
 import threading
+import time
 import unittest
+import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
+from unittest import mock
 from xml.etree import ElementTree as ET
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "01_小说通用工具"))
@@ -65,115 +70,44 @@ class TestParseRef(unittest.TestCase):
 
 
 class TestScan(unittest.TestCase):
-    def test_merges_manuscript_ws_audio(self):
+    def test_merges_manuscript_ws_audio_outline(self):
         with tempfile.TemporaryDirectory() as td:
             entries = S.scan(_make_tree(Path(td)))
             self.assertEqual([e.key for e in entries], [(1, 1, 1), (1, 1, 2)])
             e1 = entries[0]
             self.assertTrue(e1.manuscript.name == "正文_卷01_章0001.md")
             self.assertTrue(e1.ws_dir.name == "0001")
+            self.assertTrue(e1.outline.name == "规划_卷01_章0001.md")
             self.assertTrue(e1.has_audio)
             self.assertEqual(e1.duration_s(), 794)
             self.assertEqual(e1.audio_units(), [(None, e1.audio_dir / "章0001.mp3")])
             self.assertEqual(entries[1].manuscript, None)   # ch2 只有工作区
+            self.assertIsNone(entries[1].outline)
             self.assertFalse(entries[1].has_audio)
 
 
-class TestScanPlanning(unittest.TestCase):
-    def test_finds_root_and_vols(self):
+class TestScanTree(unittest.TestCase):
+    def test_titles_and_states(self):
         with tempfile.TemporaryDirectory() as td:
-            root, vols = S.scan_planning(_make_tree(Path(td)))
-            self.assertEqual(len(root.files), 2)
-            names = [f.name for f in root.files]
-            self.assertIn("00_伏笔总纲.md", names)
-            self.assertIn("规划.md", names)
-            self.assertEqual(len(vols), 1)
-            self.assertEqual(vols[0].key, (1, 1))
-            self.assertEqual(len(vols[0].files), 3)  # 卷规划 + 章细纲 + 事件文件
+            novel = _make_tree(Path(td))
+            tree, entries = S._scan_tree(novel)
+            self.assertEqual([p["n"] for p in tree], [1])
+            vol = tree[0]["vols"][0]
+            self.assertEqual(vol["n"], 1)
+            self.assertEqual(vol["title"], "卷一规划")  # 优先取「规划_卷NN.md」本体，不是伏笔册/事件文件
+            ch1, ch2 = vol["chapters"]
+            self.assertEqual(ch1["n"], 1)
+            self.assertEqual(ch1["state"], "有音频")
+            self.assertTrue(ch1["has_manuscript"])
+            self.assertEqual(ch2["state"], "待细纲")
+            self.assertFalse(ch2["has_manuscript"])
 
-    def test_empty_when_no_plan_dir(self):
+    def test_chapter_state_without_audio(self):
         with tempfile.TemporaryDirectory() as td:
-            novel = Path(td) / "novel"
-            (novel / "10_正文").mkdir(parents=True)
-            (novel / "05_工作区").mkdir(parents=True)
-            root, vols = S.scan_planning(novel)
-            self.assertEqual(len(root.files), 0)
-            self.assertEqual(len(vols), 0)
-
-
-class TestRenderProse(unittest.TestCase):
-    def test_scene_break_and_paragraphs(self):
-        h = S.render_prose(_MANUSCRIPT)
-        self.assertEqual(h.count("<p>"), 3)
-        self.assertIn("<hr>", h)
-
-
-class TestRenderMarkdown(unittest.TestCase):
-    def test_headings_para_inline(self):
-        h = S.render_markdown("# 标题\n\n一段 **粗** 和 `code` 文字。")
-        self.assertIn("<h1>标题</h1>", h)
-        self.assertIn("<strong>粗</strong>", h)
-        self.assertIn("<code>code</code>", h)
-
-    def test_gfm_table(self):
-        h = S.render_markdown("| 字段 | 值 |\n|---|---|\n| 境界 | 凡人 |\n| 内力 | 0 |")
-        self.assertIn("<table>", h)
-        self.assertIn("<th>字段</th>", h)
-        self.assertEqual(h.count("<tr>"), 3)   # 1 表头 + 2 行
-        self.assertIn("<td>凡人</td>", h)
-
-    def test_lists_and_checkboxes(self):
-        h = S.render_markdown("- a\n- b\n\n1. 一\n2. 二\n\n- [ ] 待办\n- [x] 完成")
-        self.assertIn("<ul><li>a</li><li>b</li></ul>", h)
-        self.assertIn("<ol><li>一</li><li>二</li></ol>", h)
-        self.assertIn("☐ 待办", h)
-        self.assertIn("☑ 完成", h)
-
-    def test_fence_and_quote_and_hr(self):
-        h = S.render_markdown("> 引用\n\n```\nx | y\n```\n\n---\n\n末尾")
-        self.assertIn("<blockquote>引用</blockquote>", h)
-        self.assertIn("<pre class=code><code>x | y</code></pre>", h)
-        self.assertIn("<hr>", h)
-
-    def test_escapes_html(self):
-        h = S.render_markdown("<script>alert(1)</script> 与 a<b")
-        self.assertNotIn("<script>", h)
-        self.assertIn("&lt;script&gt;", h)
-
-    def test_underscores_in_filenames_not_italic(self):
-        h = S.render_markdown("见 `00_提示词/01_正文生成.md` 与 05_工作区 目录")
-        self.assertNotIn("<em>", h)
-
-
-class TestPages(unittest.TestCase):
-    def test_home_and_lists(self):
-        with tempfile.TemporaryDirectory() as td:
-            entries = S.scan(_make_tree(Path(td)))
-            plan_root, plan_vols = S.scan_planning(Path(td) / "00_苍玄")
-            home = S.page_home(entries, "苍玄", "http://p:8765", plan_root, plan_vols).decode()
-            self.assertIn("href='/text'", home)
-            self.assertIn("href='/work'", home)
-            self.assertIn("href='/plan'", home)
-            self.assertIn("http://p:8765/feed.xml", home)
-
-            tl = S.page_list(entries, "苍玄", "text").decode()
-            self.assertIn("/text/1/1/1/read", tl)
-            self.assertIn("/text/1/1/1/listen", tl)
-            self.assertNotIn("/text/1/1/2/", tl)  # ch2 无正文 → 不在正文列表
-
-            wl = S.page_list(entries, "苍玄", "work").decode()
-            self.assertIn("/work/1/1/1/read", wl)
-            self.assertIn("/work/1/1/2/read", wl)   # ch2 有工作区
-            self.assertIn("class=off>听", wl)       # ch2 无音频 → 听禁用
-
-    def test_feed_valid(self):
-        with tempfile.TemporaryDirectory() as td:
-            entries = S.scan(_make_tree(Path(td)))
-            root = ET.fromstring(S.render_feed(entries, "苍玄", "http://p:8765"))
-            encs = root.findall(".//item/enclosure")
-            self.assertEqual(len(encs), 1)
-            self.assertEqual(encs[0].get("url"), "http://p:8765/audio/1/1/1.mp3")
-            self.assertEqual(int(encs[0].get("length")), len(_MP3))
+            novel = _make_tree(Path(td), with_audio=False)
+            tree, _entries = S._scan_tree(novel)
+            ch1 = tree[0]["vols"][0]["chapters"][0]
+            self.assertEqual(ch1["state"], "有正文")
 
 
 class TestMp3Duration(unittest.TestCase):
@@ -184,14 +118,26 @@ class TestMp3Duration(unittest.TestCase):
             self.assertEqual(S._mp3_duration_seconds(p, p.stat().st_size), 13)
 
 
-class TestHttp(unittest.TestCase):
+class TestFeed(unittest.TestCase):
+    def test_feed_valid(self):
+        with tempfile.TemporaryDirectory() as td:
+            entries = S.scan(_make_tree(Path(td)))
+            root = ET.fromstring(S.render_feed(entries, "苍玄", "http://p:8765"))
+            encs = root.findall(".//item/enclosure")
+            self.assertEqual(len(encs), 1)
+            self.assertEqual(encs[0].get("url"), "http://p:8765/audio/1/1/1.mp3")
+            self.assertEqual(int(encs[0].get("length")), len(_MP3))
+
+
+class _HttpTestBase(unittest.TestCase):
+    read_only = False
+
     def setUp(self):
         self.td = tempfile.TemporaryDirectory()
-        novel = _make_tree(Path(self.td.name))
-        plan_root, plan_vols = S.scan_planning(novel)
+        self.novel = _make_tree(Path(self.td.name))
         self.httpd = S.ThreadingHTTPServer(
             ("127.0.0.1", 0),
-            S.make_handler(novel, "苍玄", None, plan_root, plan_vols))
+            S.make_handler(self.novel, "苍玄", None, self.read_only))
         self.port = self.httpd.server_address[1]
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
 
@@ -200,84 +146,271 @@ class TestHttp(unittest.TestCase):
         self.httpd.server_close()
         self.td.cleanup()
 
-    def _get(self, path, headers=None):
-        req = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}", headers=headers or {})
-        return urllib.request.urlopen(req, timeout=5)
-
-    def test_routes(self):
-        for p in ("/", "/text", "/work", "/plan",
-                  "/text/1/1/1", "/work/1/1/1", "/text/1/1/1/listen",
-                  "/plan/1/1"):
-            with self._get(p) as r:
-                self.assertEqual(r.status, 200, p)
-                self.assertIn("text/html", r.headers["Content-Type"], p)
-
-    def test_manuscript_render_and_raw(self):
-        with self._get("/text/1/1/1/read") as r:
-            self.assertIn("class=prose", r.read().decode())
-        with self._get("/text/1/1/1/read?raw=1") as r:
-            self.assertEqual(r.headers["Content-Type"], "text/plain; charset=utf-8")
-            self.assertIn("第一段。", r.read().decode())
-
-    def test_work_file_browser(self):
-        with self._get("/work/1/1/1/read") as r:
-            body = r.read().decode()
-            self.assertIn("00_提示词/01_正文生成.md", body)
-        # .md → 渲染成 HTML（class=md），带「复制原文」按钮，不再是 <pre>
-        f = "00_%E6%8F%90%E7%A4%BA%E8%AF%8D/01_%E6%AD%A3%E6%96%87%E7%94%9F%E6%88%90.md"
-        with self._get(f"/work/1/1/1/read?f={f}") as r:
-            body = r.read().decode()
-            self.assertIn("class=md", body)
-            self.assertIn("<h1>提示词</h1>", body)
-            self.assertIn("cpfile(this)", body)
-            self.assertNotIn("pre class=file", body)
-        # &raw=1 → 纯文本原文
-        with self._get(f"/work/1/1/1/read?f={f}&raw=1") as r:
-            self.assertEqual(r.headers["Content-Type"], "text/plain; charset=utf-8")
-            self.assertEqual(r.read().decode(), "# 提示词\n内容")
-
-    def test_traversal_blocked(self):
+    def _req(self, method, path, body=None, csrf=True, headers=None):
+        data = json.dumps(body).encode("utf-8") if body is not None else None
+        h = dict(headers or {})
+        if data is not None:
+            h["Content-Type"] = "application/json"
+        if csrf and method != "GET":
+            h["X-Review-UI"] = "1"
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}", data=data, method=method, headers=h)
         try:
-            self._get("/work/1/1/1/read?f=../../../../../../etc/passwd")
-            self.fail("expected 404")
+            with urllib.request.urlopen(req, timeout=5) as r:
+                return r.status, json.loads(r.read().decode("utf-8") or "{}")
         except urllib.error.HTTPError as e:
-            self.assertEqual(e.code, 404)
+            return e.code, json.loads(e.read().decode("utf-8") or "{}")
 
-    def test_plan_file_browser(self):
-        with self._get("/plan") as r:
-            body = r.read().decode()
-            self.assertIn("伏笔总纲.md", body)
-            self.assertIn("规划.md", body)
-            self.assertIn("第 1 部 · 卷 01", body)
-        with self._get("/plan/1/1") as r:
-            body = r.read().decode()
-            self.assertIn("规划_卷01.md", body)
-            self.assertIn("规划_卷01_章0001.md", body)
-        # .md → rendered as HTML with class=md
-        f = "01_%E7%AC%AC01%E9%83%A8/01_%E5%8D%B701/%E8%A7%84%E5%88%92_%E5%8D%B701.md"
-        with self._get(f"/plan/root?f={f}") as r:
-            body = r.read().decode()
-            self.assertIn("class=md", body)
-            self.assertIn("<h1>卷一规划</h1>", body)
-            self.assertIn("cpfile(this)", body)
-        # raw mode
-        with self._get(f"/plan/root?f={f}&raw=1") as r:
-            self.assertEqual(r.headers["Content-Type"], "text/plain; charset=utf-8")
-            self.assertIn("卷规划内容", r.read().decode())
-        # traversal blocked
-        try:
-            self._get("/plan/root?f=../../../../../../etc/passwd")
-            self.fail("expected 404")
-        except urllib.error.HTTPError as e:
-            self.assertEqual(e.code, 404)
+    def _get_raw(self, path):
+        with urllib.request.urlopen(f"http://127.0.0.1:{self.port}{path}", timeout=5) as r:
+            return r.status, r.read(), dict(r.headers)
+
+
+class TestApiBook(_HttpTestBase):
+    def test_structure(self):
+        st, body = self._req("GET", "/api/book")
+        self.assertEqual(st, 200)
+        self.assertEqual(body["meta"], {"parts": 1, "vols": 1, "chapters": 2})
+        self.assertTrue(body["feed_url"].endswith("/feed.xml"))
+        v = body["parts"][0]["vols"][0]
+        self.assertEqual(len(v["chapters"]), 2)
+        self.assertEqual(v["chapters"][0]["state"], "有音频")
+        self.assertEqual(v["chapters"][0]["tag"], "neutral")
+
+
+class TestApiLevel(_HttpTestBase):
+    def test_root_children_are_parts(self):
+        st, body = self._req("GET", "/api/level?sec=work")
+        self.assertEqual(st, 200)
+        self.assertEqual(body["level"], "root")
+        self.assertEqual([c["n"] for c in body["children"]], [1])
+
+    def test_vol_children_are_chapters_and_meta(self):
+        st, body = self._req("GET", "/api/level?sec=work&part=1&vol=1")
+        self.assertEqual(st, 200)
+        self.assertEqual(body["level"], "vol")
+        self.assertEqual([c["n"] for c in body["children"]], [1, 2])
+        self.assertEqual(body["meta"], "共 2 章")
+
+    def test_text_section_only_lists_chapters_with_manuscript(self):
+        st, body = self._req("GET", "/api/level?sec=text&part=1&vol=1")
+        self.assertEqual(st, 200)
+        self.assertEqual([c["n"] for c in body["children"]], [1])  # ch2 无正文，text 分区不显示
+
+    def test_work_chapter_file_groups(self):
+        st, body = self._req("GET", "/api/level?sec=work&part=1&vol=1&ch=1")
+        self.assertEqual(st, 200)
+        self.assertEqual(body["level"], "ch")
+        names = {g["name"] for g in body["file_groups"]}
+        self.assertIn("00_提示词", names)
+        self.assertIn("02_状态", names)
+        self.assertIn("03_音频", names)
+        self.assertEqual(body["chapter"], {"n": 1, "prev": None, "next": 2})
+
+    def test_plan_vol_excludes_chapter_outline(self):
+        st, body = self._req("GET", "/api/level?sec=plan&part=1&vol=1")
+        self.assertEqual(st, 200)
+        files = body["file_groups"][0]["files"]
+        names = [f["name"] for f in files]
+        self.assertIn("规划_卷01.md", names)
+        self.assertNotIn("规划_卷01_章0001.md", names)  # 章细纲不在「本卷规划」，属于章级
+
+    def test_plan_chapter_group(self):
+        st, body = self._req("GET", "/api/level?sec=plan&part=1&vol=1&ch=1")
+        self.assertEqual(st, 200)
+        self.assertEqual(body["file_groups"][0]["files"][0]["name"], "规划_卷01_章0001.md")
+
+    def test_text_root_has_no_file_groups(self):
+        st, body = self._req("GET", "/api/level?sec=text")
+        self.assertEqual(body["file_groups"], [])
+
+    def test_unknown_level_404(self):
+        st, body = self._req("GET", "/api/level?sec=work&part=9&vol=9")
+        self.assertEqual(st, 404)
+
+
+class TestApiFile(_HttpTestBase):
+    def setUp(self):
+        super().setUp()
+        self.path = "05_工作区/03_第01部/03_卷01/0001/00_提示词/01_正文生成.md"
+
+    def test_get(self):
+        st, body = self._req("GET", "/api/file?path=" + urllib.parse.quote(self.path))
+        self.assertEqual(st, 200)
+        self.assertEqual(body["kind"], "prose")
+        self.assertIn("内容", body["text"])
+
+    def test_get_missing_404(self):
+        st, body = self._req("GET", "/api/file?path=" + urllib.parse.quote("05_工作区/没有这个文件.md"))
+        self.assertEqual(st, 404)
+
+    def test_put_overwrite_same_path(self):
+        st, body = self._req("PUT", "/api/file", {"path": self.path, "text": "新内容"})
+        self.assertEqual(st, 200)
+        self.assertEqual((self.novel / self.path).read_text(encoding="utf-8"), "新内容")
+
+    def test_put_save_as_new_file(self):
+        new_path = "05_工作区/03_第01部/03_卷01/0001/00_提示词/02_另存.md"
+        st, body = self._req("PUT", "/api/file", {"path": new_path, "text": "另存内容", "orig": self.path})
+        self.assertEqual(st, 200)
+        self.assertTrue((self.novel / new_path).is_file())
+        self.assertTrue((self.novel / self.path).is_file())  # 原文件保留
+
+    def test_put_save_as_conflict_needs_overwrite(self):
+        existing = "05_工作区/03_第01部/03_卷01/0001/02_状态/01_状态履历.md"
+        st, body = self._req("PUT", "/api/file", {"path": existing, "text": "x", "orig": self.path})
+        self.assertEqual(st, 409)
+        st, body = self._req("PUT", "/api/file", {"path": existing, "text": "x", "orig": self.path, "overwrite": True})
+        self.assertEqual(st, 200)
+
+    def test_delete_moves_to_trash(self):
+        st, body = self._req("DELETE", "/api/file?path=" + urllib.parse.quote(self.path))
+        self.assertEqual(st, 200)
+        self.assertFalse((self.novel / self.path).exists())
+        trashed = self.novel / body["trashed_to"]
+        self.assertTrue(trashed.is_file())
+        st, body = self._req("GET", "/api/file?path=" + urllib.parse.quote(self.path))
+        self.assertEqual(st, 404)
+
+
+class TestSecurity(_HttpTestBase):
+    def test_path_traversal_rejected(self):
+        st, body = self._req("PUT", "/api/file", {"path": "05_工作区/../../../etc/passwd", "text": "x"})
+        self.assertEqual(st, 400)
+
+    def test_outside_allowed_roots_rejected(self):
+        st, body = self._req("PUT", "/api/file", {"path": "01_设定/x.md", "text": "x"})
+        self.assertEqual(st, 400)
+
+    def test_bad_extension_rejected(self):
+        st, body = self._req("PUT", "/api/file", {"path": "05_工作区/x.exe", "text": "x"})
+        self.assertEqual(st, 400)
+
+    def test_missing_csrf_header_rejected(self):
+        st, body = self._req("PUT", "/api/file", {"path": "05_工作区/x.md", "text": "x"}, csrf=False)
+        self.assertEqual(st, 403)
+
+    def test_mismatched_origin_rejected(self):
+        st, body = self._req("PUT", "/api/file", {"path": "05_工作区/x.md", "text": "x"},
+                             headers={"Origin": "http://evil.example:1234"})
+        self.assertEqual(st, 403)
+
+
+class TestReadOnly(_HttpTestBase):
+    read_only = True
+
+    def test_put_rejected(self):
+        st, body = self._req("PUT", "/api/file", {"path": "05_工作区/x.md", "text": "x"})
+        self.assertEqual(st, 403)
+
+    def test_get_still_allowed(self):
+        st, body = self._req("GET", "/api/book")
+        self.assertEqual(st, 200)
+
+    def test_config_reports_read_only(self):
+        st, body = self._req("GET", "/api/config")
+        self.assertEqual(st, 200)
+        self.assertTrue(body["read_only"])
+
+
+class TestBackfill(_HttpTestBase):
+    def test_targets_root_level_are_existing_plan_files(self):
+        st, body = self._req("GET", "/api/backfill-targets")
+        self.assertEqual(st, 200)
+        ids = {t["id"] for t in body["targets"]}
+        self.assertIn("03_规划/规划.md", ids)
+        self.assertIn("03_规划/00_伏笔总纲.md", ids)
+
+    def test_chapter_targets_are_canonical_outline_and_manuscript(self):
+        st, body = self._req("GET", "/api/backfill-targets?part=1&vol=1&ch=1")
+        self.assertEqual(st, 200)
+        ids = {t["id"] for t in body["targets"]}
+        self.assertEqual(ids, {"03_规划/01_第01部/01_卷01/规划_卷01_章0001.md",
+                               "10_正文/01_第01部/01_卷01/正文_卷01_章0001.md"})
+
+    def test_apply_rejects_unknown_target_id(self):
+        src = "05_工作区/03_第01部/03_卷01/0001/00_提示词/01_正文生成.md"
+        st, body = self._req("POST", "/api/backfill",
+                             {"src": src, "target_id": "10_正文/别的.md", "part": 1, "vol": 1, "ch": 1})
+        self.assertEqual(st, 400)
+
+    def test_apply_copies_content_and_reports_mode(self):
+        src = "05_工作区/03_第01部/03_卷01/0001/00_提示词/01_正文生成.md"
+        target = "10_正文/01_第01部/01_卷01/正文_卷01_章0001.md"
+        st, body = self._req("POST", "/api/backfill", {"src": src, "target_id": target, "part": 1, "vol": 1, "ch": 1})
+        self.assertEqual(st, 200)
+        self.assertEqual(body["mode"], "manuscript")
+        self.assertEqual((self.novel / target).read_text(encoding="utf-8"),
+                         (self.novel / src).read_text(encoding="utf-8"))
+
+
+class TestJobs(_HttpTestBase):
+    def test_unimplemented_kind_501(self):
+        st, body = self._req("POST", "/api/jobs", {"kind": "check", "part": 1, "vol": 1, "ch": 1})
+        self.assertEqual(st, 501)
+        self.assertIn("未实现", body["error"])
+
+    def test_unknown_kind_400(self):
+        st, body = self._req("POST", "/api/jobs", {"kind": "not_a_kind", "part": 1, "vol": 1, "ch": 1})
+        self.assertEqual(st, 400)
+
+    def test_get_missing_job_404(self):
+        st, body = self._req("GET", "/api/jobs/does-not-exist")
+        self.assertEqual(st, 404)
+
+    def test_lifecycle_with_fake_runner(self):
+        def _fake(novel_dir, part, vol, ch, body):
+            return [sys.executable, "-c", "print('job-ran-ok')"], []
+        with mock.patch.dict(S._JOB_BUILDERS, {"outline_ch": _fake}):
+            st, body = self._req("POST", "/api/jobs", {"kind": "outline_ch", "part": 1, "vol": 1, "ch": 1})
+            self.assertEqual(st, 200)
+            job_id = body["job_id"]
+            job = self._poll_job(job_id)
+            self.assertEqual(job["status"], "ok")
+            self.assertIn("job-ran-ok", job["log"])
+
+    def test_dedupe_rejects_concurrent_same_job(self):
+        def _slow(novel_dir, part, vol, ch, body):
+            return [sys.executable, "-c", "import time; time.sleep(0.6)"], []
+        with mock.patch.dict(S._JOB_BUILDERS, {"outline_ch": _slow}):
+            st1, body1 = self._req("POST", "/api/jobs", {"kind": "outline_ch", "part": 1, "vol": 1, "ch": 1})
+            self.assertEqual(st1, 200)
+            st2, body2 = self._req("POST", "/api/jobs", {"kind": "outline_ch", "part": 1, "vol": 1, "ch": 1})
+            self.assertEqual(st2, 409)
+            self._poll_job(body1["job_id"])  # 等它跑完，不留后台线程
+
+    def _poll_job(self, job_id, timeout=5):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            st, body = self._req("GET", f"/api/jobs/{job_id}")
+            self.assertEqual(st, 200)
+            if body["status"] != "running":
+                return body
+            time.sleep(0.05)
+        self.fail("job 一直没跑完")
+
+
+class TestHttpMisc(_HttpTestBase):
+    def test_static_and_health(self):
+        st, body, headers = self._get_raw("/health")
+        self.assertEqual(st, 200)
+        st, body, headers = self._get_raw("/")
+        self.assertEqual(st, 200)
+        self.assertIn("text/html", headers["Content-Type"])
+        st, body, headers = self._get_raw("/app.js")
+        self.assertEqual(st, 200)
+        self.assertIn("javascript", headers["Content-Type"])
 
     def test_audio_range_and_feed(self):
-        with self._get("/audio/1/1/1.mp3", {"Range": "bytes=10-59"}) as r:
+        st, body, headers = self._get_raw("/audio/1/1/1.mp3")
+        # 无 Range 头默认整段返回；专测 Range 见下
+        self.assertEqual(st, 200)
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}/audio/1/1/1.mp3", headers={"Range": "bytes=10-59"})
+        with urllib.request.urlopen(req, timeout=5) as r:
             self.assertEqual(r.status, 206)
             self.assertEqual(r.headers["Content-Range"], f"bytes 10-59/{len(_MP3)}")
             self.assertEqual(len(r.read()), 50)
-        with self._get("/feed.xml") as r:
-            self.assertIn("rss+xml", r.headers["Content-Type"])
+        st, body, headers = self._get_raw("/feed.xml")
+        self.assertIn("rss+xml", headers["Content-Type"])
 
 
 if __name__ == "__main__":

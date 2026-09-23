@@ -16,17 +16,19 @@ ExecStart=/usr/bin/python3 @@REPO@@/02_工具/01_小说通用工具/serve_audio.
 Restart=on-failure
 RestartSec=3
 
-# —— 资源兜底（Pi 上常驻空闲也几乎不占；这里只是防意外）——
+# —— 资源兜底（v3 起会在后台子进程里跑 build_prompt.py / review_manuscript.py /
+#    tts_chapter.py，比纯浏览吃得多；这里只是防意外，不是常态占用）——
 Nice=10
 CPUWeight=20
-MemoryMax=128M
-TasksMax=64
+MemoryMax=1G
+TasksMax=256
 
-# —— 加固：本服务只读文件、只对外提供 HTTP ——
+# —— 加固：除 @@NOVEL_DIR@@（本服务的写入范围）外，其余文件系统只读 ——
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ProtectHome=read-only
+ProtectHome=false
+ReadWritePaths=@@NOVEL_DIR@@
 ProtectControlGroups=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
