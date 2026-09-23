@@ -125,7 +125,7 @@ exempt_sentences = [
 # 规则代码里的常量没改 → 白名单静默失效。
 tool_roots = ["02_工具/00_系统级", "02_工具/01_小说通用工具"]
 skeleton = "00_通用模板/05_项目骨架模板"
-exclude = ["99_一次性脚本_归档", "__pycache__", ".venv", "tests"]
+exclude = ["__pycache__", ".venv", "tests"]
 # 骨架里按需才创建、不预建的路径
 allow_missing = [
   "05_工作区/02_状态/00_基线候选",

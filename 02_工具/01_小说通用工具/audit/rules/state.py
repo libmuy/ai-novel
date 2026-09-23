@@ -335,7 +335,8 @@ class StateRule(AuditRule):
             findings.append(Finding(
                 severity=Severity.ERROR, rule=self.name, code="STATE013",
                 message=f"01_最新状态/ 下有 {len(flat)} 个已废弃的扁平分类文件: {flat}",
-                file=None, suggestion="运行 migrate_state_layout.py 迁移为每对象一文件的目录树",
+                file=None, suggestion="迁移为每对象一文件的目录树（旧版迁移脚本已归档删除，参考"
+                                      "git 历史 99_一次性脚本_归档/migrate_state_layout.py 手工重做）",
                 category="01_最新状态", locations=[f"01_最新状态/{n}" for n in flat]
             ))
 
@@ -346,7 +347,8 @@ class StateRule(AuditRule):
             findings.append(Finding(
                 severity=Severity.WARNING, rule=self.name, code="STATE014",
                 message="冻结基线 05_工作区/02_状态/00_基线状态/ 不存在，无法校验全局状态一致性",
-                file=None, suggestion="新书用技能 08_基线状态初始化 生成基线；旧书用 migrate_state_layout.py 迁移",
+                file=None, suggestion="新书用技能 08_基线状态初始化 生成基线；旧版布局的迁移脚本已归档删除，"
+                                      "参考 git 历史 99_一次性脚本_归档/migrate_state_layout.py 手工重做",
                 category="01_最新状态", locations=[]
             ))
             return

@@ -3,7 +3,7 @@
 ai-novel 仓库一致性审查脚本（Agent 可读版）v3.0
 
 用法:
-    python3 audit_consistency.py <小说目录路径> [--format json|text] [--rule RULE_NAME] [--severity error|warning|info] [--strict] [--auto-fix]
+    python3 audit_consistency.py <小说目录路径> [--format json|text] [--rule RULE_NAME] [--severity error|warning|info] [--strict]
 
 向下兼容入口，调用重构后的 audit 模块引擎。
 """
@@ -97,7 +97,6 @@ def main():
     ap.add_argument("--rule", help="仅运行指定的 Rule (如 filesystem, index, state, geography, ids)")
     ap.add_argument("--severity", choices=["error", "warning", "info"], help="仅输出指定级别或更高权重的 Finding")
     ap.add_argument("--strict", action="store_true", help="严格模式：当存在 WARNING 或 ERROR 时返回非 0 退出码")
-    ap.add_argument("--auto-fix", action="store_true", help="在审查前自动调用 auto_link_placeholders.py 进行占位符回补修复")
 
     args = ap.parse_args()
     novel_dir = Path(args.novel_dir).resolve()
@@ -105,19 +104,6 @@ def main():
     if not novel_dir.exists():
         print(json.dumps({"error": f"目录不存在: {novel_dir}"}, ensure_ascii=False), file=sys.stderr)
         sys.exit(1)
-
-    if args.auto_fix:
-        try:
-            import importlib.util
-            script_dir = Path(__file__).resolve().parent
-            auto_link_path = script_dir / "auto_link_placeholders.py"
-            if auto_link_path.exists():
-                spec = importlib.util.spec_from_file_location("auto_link_placeholders", auto_link_path)
-                mod = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(mod)
-                mod.run_auto_link(novel_dir, dry_run=False)
-        except Exception as e:
-            print(f"Warning: auto-fix 运行失败: {e}", file=sys.stderr)
 
     engine = get_default_engine(novel_dir)
     context = AuditContext(novel_dir)

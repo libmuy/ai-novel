@@ -48,9 +48,7 @@ novel-generator/
 │   ├── merge_chapter_state.py  # 章末：把本章履历折叠进 05_工作区/02_状态/01_最新状态/（描述字段调一次 LLM 合并）
 │   ├── rebuild_global_state.py # 改早期章节后：从冻结基线全量重折（--dry-run 安全网）
 │   ├── build_state_snapshot.py # 卷末快照 / 某章开篇状态（--volume-dir / --at-chapter，只读不调 LLM）
-│   ├── migrate_state_layout.py # 一次性：旧扁平布局 -> 每对象一文件的树 + 冻结基线
-│   ├── new_novel.py            # 脚手架新小说（算编号/拷骨架/建软链/填占位符，无 LLM）
-│   └── eval_architecture.py    # 架构 Token 效率与千万字扩展性量化评估脚本
+│   └── new_novel.py            # 脚手架新小说（算编号/拷骨架/建软链/填占位符，无 LLM）
 └── 00_系统架构评估报告与优化建议.md  # 系统架构评估与千万字落地重构方案
 ```
 
@@ -64,13 +62,7 @@ novel-generator/
 python3 02_工具/01_小说通用工具/audit_consistency.py 01_小说数据/00_苍玄 --format text
 ```
 
-### 2. 运行架构 Token 效率与规模评估
-量化评估路由表加载策略及千万字长篇（3,300+ 章）下的上下文 Token 开销：
-```bash
-python3 02_工具/00_系统级/eval_architecture.py
-```
-
-### 3. 新建小说项目
+### 2. 新建小说项目
 用脚本脚手架新小说目录（`NN` 自动递增，建软链、填 AGENTS.md 占位符）：
 ```bash
 python3 02_工具/00_系统级/new_novel.py <小说名>          # 先 --dry-run 看计划

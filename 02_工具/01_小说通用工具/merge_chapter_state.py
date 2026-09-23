@@ -182,7 +182,8 @@ def _run():
         acquire_until_exit(os.path.dirname(live.rstrip("/")), tool="merge_chapter_state.py")
     if not os.path.isdir(baseline):
         print(f"错误: 冻结基线不存在: {baseline}\n"
-              f"先用技能 08_基线状态初始化 生成基线（新书），或 migrate_state_layout.py 迁移（旧书）。")
+              f"先用技能 08_基线状态初始化 生成基线（新书）；旧版扁平布局的迁移脚本已归档删除"
+              f"（一次性用途已完成，需要时参考 git 历史 99_一次性脚本_归档/migrate_state_layout.py）。")
         sys.exit(1)
 
     changelogs = st.iter_workspace_changelogs(novel_dir)
