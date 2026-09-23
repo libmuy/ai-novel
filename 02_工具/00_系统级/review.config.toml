@@ -13,8 +13,11 @@
 
 [critics]
 opencode = true
-# 按顺序依次尝试，第一个成功的即用。mimo-v2.5-free 反应快，放首位；nemotron 作回退。
-opencode_models = ["mimo-v2.5-free", "nemotron-3-ultra-free"]
+# 按顺序依次尝试，第一个成功的即用。mimo 反应快，放首位；nemotron 作回退。
+# 2026-09-22：opencode 侧把 mimo-v2.5-free 下线换成了 mimo-v2.6-flash-free（旧名三次
+# 调用均 UnknownError，模型列表里已查不到），本行同步改名；historical 的各章冷读记录仍保留
+# 旧名，那是当时真实用过的模型，不回改。
+opencode_models = ["mimo-v2.6-flash-free", "nemotron-3-ultra-free"]
 
 # "auto" = 先探测 ai-station.local:8080，活着才加入；true = 强制用（挂了则报错）；false = 不用
 local_qwen = "auto"

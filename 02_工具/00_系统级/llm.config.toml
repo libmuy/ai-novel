@@ -12,7 +12,7 @@
 #                就试下一个，全部失败才报错。
 #   "auto"     — 先探测 base_url 的主机:端口，可达就用 http；不可达就自动降级到
 #                opencode（降级会在 stderr 打一行明确提示，例如
-#                "[_llm] ai-station.local:8080 不可达，降级到 opencode/mimo-v2.5-free"，
+#                "[_llm] ai-station.local:8080 不可达，降级到 opencode/mimo-v2.6-flash-free"，
 #                不会静默切换）；两条路都走不通（端点不可达 且 本机没装 opencode CLI）
 #                才抛 LlmError，中止合并、不写文件。
 backend = "auto"
@@ -38,5 +38,5 @@ temperature = 0.2
 enable_thinking = false
 
 # opencode 后端可选覆盖（缺省用 _llm.py 内置的免费模型列表，按顺序试）：
-# opencode_models = ["opencode/mimo-v2.5-free", "opencode/nemotron-3-ultra-free"]
+# opencode_models = ["opencode/mimo-v2.6-flash-free", "opencode/nemotron-3-ultra-free"]
 # opencode_timeout = 300

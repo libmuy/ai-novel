@@ -26,7 +26,7 @@
       max_tokens = 4096
       temperature = 0.2
       # opencode 后端可选覆盖：
-      # opencode_models = ["opencode/mimo-v2.5-free", "opencode/nemotron-3-ultra-free"]
+      # opencode_models = ["opencode/mimo-v2.6-flash-free", "opencode/nemotron-3-ultra-free"]
       # opencode_timeout = 300
 - `02_工具/00_系统级/llm.secret.toml`（可选，已 gitignore）：
       api_key = "sk-..."
@@ -54,7 +54,9 @@ SECRET_FILENAME = "llm.secret.toml"
 _THINK_RE = re.compile(r"<think>.*?</think>", re.S)
 
 # opencode 后端默认试用的免费模型（按顺序试，前一个失败/空输出/超时则试下一个）
-_OPENCODE_MODELS = ["opencode/mimo-v2.5-free", "opencode/nemotron-3-ultra-free"]
+# 2026-09-22：mimo-v2.5-free 已被 opencode 侧下线（三次调用均 UnknownError，模型列表里
+# 已查不到），改用替代名 mimo-v2.6-flash-free；日后再改名，同步这里 + review.config.toml。
+_OPENCODE_MODELS = ["opencode/mimo-v2.6-flash-free", "opencode/nemotron-3-ultra-free"]
 
 
 class LlmError(Exception):
