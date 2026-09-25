@@ -121,7 +121,7 @@ def _backfill_targets(novel_dir: Path, part, vol, ch, tree) -> list[dict]:
 
 
 def _do_backfill(novel_dir: Path, src_rel: str, target_id: str, part, vol, ch, tree) -> dict:
-    src = files._safe_resolve(novel_dir, src_rel)
+    src = files._safe_resolve(novel_dir, src_rel, require_text=True)
     targets = _backfill_targets(novel_dir, part, vol, ch, tree)
     if target_id not in {t["id"] for t in targets}:
         raise ValueError("非法回填目标")

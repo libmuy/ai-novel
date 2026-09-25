@@ -78,8 +78,12 @@ def _list_files(novel_dir: Path, d: Path | None) -> list[dict]:
     return out
 
 
-def _validate_rel_path(novel_dir: Path, rel_path: str) -> Path:
-    """校验一个「可能尚不存在」的相对路径可以安全写入；返回绝对路径。"""
+def _validate_rel_path(novel_dir: Path, rel_path: str, *, require_text: bool = True) -> Path:
+    """校验一个「可能尚不存在」的相对路径可以安全访问；返回绝对路径。
+
+    require_text=True（写入/回填目标/回填来源）：扩展名限文本类；
+    require_text=False（读取/删除）：不查扩展名，按扩展名分类交给调用方。
+    """
     if not rel_path or rel_path.startswith("/") or rel_path.startswith("~"):
         raise ValueError("非法路径")
     parts = Path(rel_path).parts
@@ -87,7 +91,7 @@ def _validate_rel_path(novel_dir: Path, rel_path: str) -> Path:
         raise ValueError("非法路径")
     if parts[0] not in _ALLOWED_ROOTS:
         raise ValueError("路径必须在 05_工作区/03_规划/10_正文 之内")
-    if Path(rel_path).suffix.lower() not in _TEXT_EXT:
+    if require_text and Path(rel_path).suffix.lower() not in _TEXT_EXT:
         raise ValueError("不支持写入该扩展名")
     nd = novel_dir.resolve()
     target = (nd / rel_path).resolve()
@@ -103,9 +107,9 @@ def _validate_rel_path(novel_dir: Path, rel_path: str) -> Path:
     return target
 
 
-def _safe_resolve(novel_dir: Path, rel_path: str) -> Path:
-    """校验一个必须已存在的相对路径；返回绝对路径。"""
-    target = _validate_rel_path(novel_dir, rel_path)
+def _safe_resolve(novel_dir: Path, rel_path: str, *, require_text: bool = False) -> Path:
+    """校验一个必须已存在的相对路径；返回绝对路径。默认不查扩展名（读/删）。"""
+    target = _validate_rel_path(novel_dir, rel_path, require_text=require_text)
     if not target.is_file():
         raise FileNotFoundError(rel_path)
     return target

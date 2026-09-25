@@ -271,6 +271,26 @@ class TestApiFile(_HttpTestBase):
         st, body = self._req("GET", "/api/file?path=" + urllib.parse.quote(self.path))
         self.assertEqual(st, 404)
 
+    def test_get_mp3_returns_audio(self):
+        mp3 = "05_工作区/03_第01部/03_卷01/0001/03_音频/章0001.mp3"
+        st, body = self._req("GET", "/api/file?path=" + urllib.parse.quote(mp3))
+        self.assertEqual(st, 200)
+        self.assertEqual(body["kind"], "audio")
+        self.assertEqual(body["audio_url"], "/audio/1/1/1.mp3")
+
+    def test_delete_mp3_moves_to_trash(self):
+        mp3 = "05_工作区/03_第01部/03_卷01/0001/03_音频/章0001.mp3"
+        st, body = self._req("DELETE", "/api/file?path=" + urllib.parse.quote(mp3))
+        self.assertEqual(st, 200)
+        self.assertFalse((self.novel / mp3).exists())
+        self.assertTrue((self.novel / body["trashed_to"]).is_file())
+
+    def test_put_mp3_still_rejected(self):
+        st, body = self._req("PUT", "/api/file",
+                             {"path": "05_工作区/03_第01部/03_卷01/0001/03_音频/新.mp3", "text": "x"})
+        self.assertEqual(st, 400)
+        self.assertIn("扩展名", body["error"])
+
 
 class TestSecurity(_HttpTestBase):
     def test_path_traversal_rejected(self):
@@ -341,6 +361,13 @@ class TestBackfill(_HttpTestBase):
         self.assertEqual(body["mode"], "manuscript")
         self.assertEqual((self.novel / target).read_text(encoding="utf-8"),
                          (self.novel / src).read_text(encoding="utf-8"))
+
+    def test_apply_from_mp3_rejected(self):
+        src = "05_工作区/03_第01部/03_卷01/0001/03_音频/章0001.mp3"
+        target = "10_正文/01_第01部/01_卷01/正文_卷01_章0001.md"
+        st, body = self._req("POST", "/api/backfill", {"src": src, "target_id": target, "part": 1, "vol": 1, "ch": 1})
+        self.assertEqual(st, 400)
+        self.assertIn("扩展名", body["error"])
 
 
 class TestJobs(_HttpTestBase):
