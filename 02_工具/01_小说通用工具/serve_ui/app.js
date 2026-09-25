@@ -111,6 +111,234 @@ function setState(patch) { Object.assign(S, patch); render(); }
 function flash(msg) { setState({ flash: msg }); }
 function fail(err) { flash("⚠ " + (err && err.message ? err.message : String(err))); }
 
+// ---------------------------------------------------------------- 迷你播放器
+//
+// 音频元素与播放条挂在 index.html 的 #app 之外，render() 永远碰不到它们，
+// 所以切章 / 切区 / 切文件 / 任务轮询（每 800ms 一次 render）都不会中断播放。
+// 播放状态 P 同样放在 S 之外：loadLevel() 的 Object.assign 会重置 S 的字段。
+
+const AUDIO = document.getElementById("player-audio");
+const PL = document.getElementById("miniplayer");
+const P = { url: "", title: "", sub: "", album: "", dur: 0, error: "" };
+let PL_NODES = null;
+
+function fmtTime(sec) {
+  if (!isFinite(sec) || sec < 0) sec = 0;
+  const total = Math.floor(sec), hr = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60), s = total % 60;
+  return hr ? `${hr}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}` : `${m}:${String(s).padStart(2, "0")}`;
+}
+
+// 锁屏/通知栏封面：画一张 256×256 的波形图，失败就当作没有封面。
+let _playerArt = null;
+function playerArtwork() {
+  if (_playerArt !== null) return _playerArt;
+  _playerArt = "";
+  try {
+    const c = document.createElement("canvas");
+    c.width = 256; c.height = 256;
+    const g = c.getContext("2d");
+    g.fillStyle = "#232532"; g.fillRect(0, 0, 256, 256);
+    g.fillStyle = "#9184d9";
+    const bars = [36, 74, 118, 156, 128, 92, 148, 104, 66, 124, 86, 142, 58];
+    const w = 10, gap = (256 - 24 - bars.length * w) / (bars.length - 1);
+    bars.forEach((hh, i) => {
+      const x = 12 + i * (w + gap), y = (256 - hh) / 2;
+      const r = Math.min(w / 2, 4);
+      g.beginPath();
+      g.moveTo(x + r, y);
+      g.arcTo(x + w, y, x + w, y + hh, r);
+      g.arcTo(x + w, y + hh, x, y + hh, r);
+      g.arcTo(x, y + hh, x, y, r);
+      g.arcTo(x, y, x + w, y, r);
+      g.closePath(); g.fill();
+    });
+    _playerArt = c.toDataURL("image/png");
+  } catch (e) { _playerArt = ""; }
+  return _playerArt;
+}
+
+function mediaSession() { return "mediaSession" in navigator ? navigator.mediaSession : null; }
+
+function updateMediaSession() {
+  const ms = mediaSession();
+  if (!ms) return;
+  try {
+    if (!P.url || typeof MediaMetadata === "undefined") { ms.metadata = null; return; }
+    const art = playerArtwork();
+    ms.metadata = new MediaMetadata({
+      title: P.title || "",
+      artist: (S.book && S.book.title) || "",
+      album: P.album || P.sub || "",
+      artwork: art ? [{ src: art, sizes: "256x256", type: "image/png" }] : [],
+    });
+  } catch (e) { /* 老浏览器忽略 */ }
+}
+
+function updatePlaybackState() {
+  const ms = mediaSession();
+  if (!ms) return;
+  try { ms.playbackState = P.url ? (AUDIO.paused || AUDIO.ended ? "paused" : "playing") : "none"; } catch (e) { /* 忽略 */ }
+}
+
+let _posSec = -1;
+function syncPositionState() {
+  const ms = mediaSession();
+  if (!ms || typeof ms.setPositionState !== "function") return;
+  const dur = isFinite(AUDIO.duration) && AUDIO.duration > 0 ? AUDIO.duration : 0;
+  if (!P.url || !dur) return;
+  const s = Math.floor(AUDIO.currentTime);
+  if (s === _posSec) return;
+  _posSec = s;
+  try { ms.setPositionState({ duration: dur, playbackRate: AUDIO.playbackRate || 1, position: Math.min(AUDIO.currentTime, dur) }); }
+  catch (e) { /* 参数不合法时忽略 */ }
+}
+
+function loadTrack(url, title, sub) {
+  if (P.url === url) return false;
+  P.url = url; P.title = title; P.sub = sub || ""; P.album = rawPath(); P.dur = 0; P.error = "";
+  _posSec = -1;
+  AUDIO.src = url;
+  updateMediaSession();
+  return true;
+}
+
+function playTrack(url, title, sub) {
+  loadTrack(url, title, sub);
+  const pr = AUDIO.play();
+  if (pr && pr.catch) pr.catch((e) => { P.error = "无法播放：" + (e && e.message ? e.message : String(e)); renderPlayer(); });
+  renderPlayer();
+}
+
+function togglePlayer() {
+  if (!P.url) return;
+  if (AUDIO.paused || AUDIO.ended) {
+    const pr = AUDIO.play();
+    if (pr && pr.catch) pr.catch((e) => { P.error = "无法播放：" + (e && e.message ? e.message : String(e)); renderPlayer(); });
+  } else AUDIO.pause();
+}
+
+function closePlayer() {
+  AUDIO.pause();
+  AUDIO.removeAttribute("src");
+  try { AUDIO.load(); } catch (e) { /* 释放媒体资源，失败无所谓 */ }
+  P.url = ""; P.title = ""; P.sub = ""; P.album = ""; P.dur = 0; P.error = ""; _posSec = -1;
+  const ms = mediaSession();
+  if (ms) { try { ms.metadata = null; ms.playbackState = "none"; } catch (e) { /* 忽略 */ } }
+  renderPlayer();
+  render();
+}
+
+function refreshPlayerButton() {
+  if (!PL_NODES || !PL_NODES.playBtn) { renderPlayer(); return; }
+  const playing = !AUDIO.paused && !AUDIO.ended;
+  const b = PL_NODES.playBtn;
+  if (b.dataset.playing === String(playing)) return;
+  b.dataset.playing = String(playing);
+  b.innerHTML = "";
+  b.appendChild(icon(playing ? "ph-pause" : "ph-play", 18));
+  b.title = playing ? "暂停" : "播放";
+  b.setAttribute("aria-label", b.title);
+}
+
+function renderPlayer() {
+  PL_NODES = null;
+  document.body.classList.toggle("has-player", !!P.url);
+  if (!P.url) { PL.hidden = true; PL.innerHTML = ""; return; }
+  PL.hidden = false;
+  PL.innerHTML = "";
+  const playing = !AUDIO.paused && !AUDIO.ended;
+  const range = h("input", {
+    class: "mp-range", type: "range", min: "0",
+    max: String(P.dur > 0 ? P.dur : 100), step: "any",
+    value: String(Math.min(AUDIO.currentTime || 0, P.dur || Infinity)),
+    "aria-label": "播放进度",
+    // 拖动期间不要让 timeupdate 把滑块拽回去（pointer/touch 两套都挂，iOS 兼容）
+    onPointerDown: () => { if (PL_NODES) PL_NODES.dragging = true; },
+    onTouchStart: () => { if (PL_NODES) PL_NODES.dragging = true; },
+    onPointerUp: () => { if (PL_NODES) PL_NODES.dragging = false; },
+    onTouchEnd: () => { if (PL_NODES) PL_NODES.dragging = false; },
+    onInput: (e) => {
+      const v = Number(e.target.value);
+      try { AUDIO.currentTime = v; } catch (err) { /* 未就绪时忽略 */ }
+      if (PL_NODES && PL_NODES.cur) PL_NODES.cur.textContent = fmtTime(v);
+    },
+    onChange: () => { if (PL_NODES) PL_NODES.dragging = false; },
+    onBlur: () => { if (PL_NODES) PL_NODES.dragging = false; },
+  });
+  const playBtn = h("button", {
+    class: "mp-btn", type: "button", title: playing ? "暂停" : "播放",
+    "aria-label": playing ? "暂停" : "播放", onClick: togglePlayer,
+  }, icon(playing ? "ph-pause" : "ph-play", 18));
+  playBtn.dataset.playing = String(playing);
+  const closeBtn = h("button", {
+    class: "mp-btn mp-close", type: "button", title: "关闭播放器", "aria-label": "关闭播放器", onClick: closePlayer,
+  }, icon("ph-x", 16));
+  const cur = h("span", { class: "mp-time mono" }, fmtTime(AUDIO.currentTime));
+  const dur = h("span", { class: "mp-time mono" }, fmtTime(P.dur));
+
+  PL.appendChild(h("div", { class: "mp-top" },
+    playBtn,
+    h("div", { class: "mp-meta" },
+      h("div", { class: "mp-title" }, P.title || "正在播放"),
+      h("div", { class: "mp-sub" }, P.sub || "")),
+    closeBtn));
+  if (P.error) PL.appendChild(h("div", { class: "mp-error" }, P.error));
+  PL.appendChild(h("div", { class: "mp-seek" }, cur, range, dur));
+  PL_NODES = { range, cur, playBtn, dragging: false };
+}
+
+function onPlayerState() {
+  updatePlaybackState();
+  syncPositionState();
+  refreshPlayerButton();
+  render(); // 同步预览面板里的播放/暂停按钮文案
+}
+
+function initPlayer() {
+  AUDIO.addEventListener("play", onPlayerState);
+  AUDIO.addEventListener("pause", onPlayerState);
+  AUDIO.addEventListener("ended", onPlayerState);
+  AUDIO.addEventListener("loadedmetadata", () => {
+    P.dur = isFinite(AUDIO.duration) && AUDIO.duration > 0 ? AUDIO.duration : 0;
+    updateMediaSession();
+    syncPositionState();
+    renderPlayer();
+  });
+  AUDIO.addEventListener("timeupdate", () => {
+    if (PL_NODES && !PL_NODES.dragging) {
+      PL_NODES.range.value = String(AUDIO.currentTime);
+      PL_NODES.cur.textContent = fmtTime(AUDIO.currentTime);
+    }
+    syncPositionState();
+  });
+  AUDIO.addEventListener("error", () => {
+    if (!AUDIO.getAttribute("src")) return; // 主动关闭时的空 src，不算错误
+    P.error = "加载失败（音频可能已被删除）";
+    renderPlayer();
+  });
+
+  const ms = mediaSession();
+  if (ms) {
+    const set = (name, fn) => { try { ms.setActionHandler(name, fn); } catch (e) { /* 不支持则跳过 */ } };
+    set("play", () => { if (P.url) { const pr = AUDIO.play(); if (pr && pr.catch) pr.catch(() => {}); } });
+    set("pause", () => AUDIO.pause());
+    set("seekbackward", (d) => { const off = (d && d.seekOffset) || 10; try { AUDIO.currentTime = Math.max(0, AUDIO.currentTime - off); } catch (e) {} });
+    set("seekforward", (d) => { const off = (d && d.seekOffset) || 30; try { AUDIO.currentTime = Math.min(AUDIO.duration || 1e9, AUDIO.currentTime + off); } catch (e) {} });
+    set("seekto", (d) => { if (d && typeof d.seekTime === "number") { try { AUDIO.currentTime = d.seekTime; } catch (e) {} } });
+  }
+  renderPlayer();
+}
+
+// 当前打开的音频该显示成什么名字：优先用章级标题，按场切分再补场号。
+function audioTrackTitle(path) {
+  if (S.level && S.level.level === "ch" && S.ch != null) {
+    const m = basename(path).match(/_场(\d+)/);
+    return m ? `${S.level.title} · 场 ${m[1]}` : S.level.title;
+  }
+  return basename(path);
+}
+
 // ---------------------------------------------------------------- 导航
 
 function curKey() { return { sec: S.sec, part: S.part, vol: S.vol, ch: S.ch }; }
@@ -581,10 +809,20 @@ function previewPanel(readOnly) {
       h("div", { style: "font-size:11.5px;color:var(--color-neutral-500)" },
         `${S.file} · Ctrl/⌘+S 保存 · 改文件名即另存为新文件，原文件保留`));
   } else if (S.fileData.kind === "audio") {
-    body = h("div", { style: "padding:var(--space-8);display:flex;align-items:center;gap:var(--space-4)" },
-      S.fileData.audio_url
-        ? h("audio", { controls: true, preload: "none", src: S.fileData.audio_url, style: "flex:1" })
-        : h("span", { style: "color:var(--color-neutral-500)" }, "找不到音频文件"));
+    const url = S.fileData.audio_url;
+    const isCur = !!url && P.url === url;
+    const isPlaying = isCur && !AUDIO.paused && !AUDIO.ended;
+    body = h("div", { style: "padding:var(--space-8);display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-4)" },
+      url
+        ? h("button", {
+            class: "btn btn-primary", style: "font-size:13px",
+            onClick: () => { if (isCur) togglePlayer(); else playTrack(url, audioTrackTitle(S.file), basename(S.file)); },
+          }, icon(isPlaying ? "ph-pause" : "ph-play", 15), isPlaying ? "暂停" : isCur ? "继续播放" : "播放")
+        : h("span", { style: "color:var(--color-neutral-500)" }, "找不到音频文件"),
+      isCur ? tag(isPlaying ? "正在播放" : "已暂停", "accent") : null,
+      S.fileData.desc ? h("span", { style: "font-size:12.5px;color:var(--color-neutral-500)" }, S.fileData.desc) : null,
+      url ? h("span", { style: "font-size:12.5px;color:var(--color-neutral-500)" },
+        "播放条常驻屏幕下方，切章 / 切区 / 切后台都不中断") : null);
   } else if (S.fileData.kind === "binary") {
     body = h("div", { style: "padding:var(--space-8);color:var(--color-neutral-500)" }, "该文件类型不支持预览。");
   } else if (S.fileData.kind === "prose") {
@@ -801,6 +1039,7 @@ function render() {
 window.addEventListener("resize", () => { S.vw = window.innerWidth; render(); });
 
 (async function init() {
+  initPlayer();
   try {
     S.config = await API.config();
   } catch (e) { /* 配置读不到也不阻塞浏览 */ }

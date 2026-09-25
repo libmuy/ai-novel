@@ -19,6 +19,10 @@
 </head>
 <body>
 <div id="app"></div>
+<!-- 迷你播放器与音频元素常驻此处，刻意放在 #app 之外：
+     render() 只清空 #app，切章/切区/任务轮询都不会销毁正在播放的音频。 -->
+<div id="miniplayer" class="miniplayer" hidden></div>
+<audio id="player-audio" preload="metadata"></audio>
 <script src="/app.js"></script>
 </body>
 </html>

@@ -291,3 +291,52 @@ textarea.input { min-height: 90px; resize: vertical; }
 }
 .dialog-body { font-size: 14px; opacity: 0.85; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: var(--space-2); margin-top: var(--space-2); }
+
+/* — mini player — */
+/* 常驻浮条：挂在 #app 之外，render() 不重建它。移动端抬到吸底导航之上。 */
+.miniplayer {
+  position: fixed; z-index: 30;
+  right: var(--space-6); bottom: var(--space-6);
+  width: min(420px, calc(100vw - var(--space-8) * 2));
+  display: flex; flex-direction: column; gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-md);
+}
+.miniplayer[hidden] { display: none; }
+.mp-top { display: flex; align-items: center; gap: var(--space-3); }
+.mp-btn {
+  flex: none; display: grid; place-items: center; width: 38px; height: 38px;
+  border: 0; border-radius: 999px; cursor: pointer; font: inherit;
+  background: var(--color-accent); color: var(--color-neutral-100);
+}
+.mp-btn:hover { background: var(--color-accent-600); }
+.mp-close { width: 32px; height: 32px; background: transparent; color: var(--color-neutral-400); }
+.mp-close:hover { background: color-mix(in srgb, var(--color-text) 10%, transparent); color: var(--color-text); }
+.mp-meta { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.mp-title {
+  font-size: 13px; font-weight: 500;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.mp-sub {
+  font-size: 11px; color: var(--color-neutral-500);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.mp-seek { display: flex; align-items: center; gap: var(--space-3); }
+.mp-time { flex: none; min-width: 40px; font-size: 11px; color: var(--color-neutral-400); text-align: center; font-variant-numeric: tabular-nums; }
+.mp-range { flex: 1 1 auto; min-width: 0; height: 26px; accent-color: var(--color-accent); cursor: pointer; }
+.mp-error { font-size: 11.5px; color: var(--color-accent-300); }
+@media (max-width: 719.98px) {
+  .miniplayer {
+    left: var(--space-4); right: var(--space-4); width: auto;
+    bottom: calc(64px + env(safe-area-inset-bottom)); /* 让开吸底三格导航 */
+  }
+}
+
+/* 播放条打开时给内容留出底部空隙，免得最后一行被浮条压住。padding 用的是
+!important：app.js 给 <main> 的内联 padding 简写会盖过这里的长手写。 */
+body.has-player main { padding-bottom: calc(var(--space-8) * 2.5 + 110px) !important; }
+@media (max-width: 719.98px) {
+  body.has-player main { padding-bottom: 150px !important; }
+}
