@@ -412,6 +412,21 @@ body.player-collapsed .miniplayer {
   .mp-sub { display: none; } /* 小屏只留章节标题一行，文件名让位 */
 }
 
+/* — 吸底三格导航的自动隐藏 —
+   下滑藏、上滑露、页顶永远露；状态由 app.js 的滚动监听维护（UI.navHidden + body.nav-hidden）。
+   只做 transform 位移：导航是文档流里的最后一块，藏起来正文不重排，只是不再盖住最后一行。 */
+.tabbar { transition: transform .22s ease; }
+.tabbar.is-hidden { transform: translateY(100%); pointer-events: none; }
+
+/* 导航藏起来时，播放条跟着沉到屏幕最底（不留一条空档），导航回来它再抬回去。
+   优先级 (0,2,1) 压得过上面媒体查询里的 .miniplayer (0,1,0)，不用 !important。 */
+.miniplayer { transition: bottom .22s ease; }
+body.nav-hidden .miniplayer { bottom: calc(var(--space-4) + env(safe-area-inset-bottom)); }
+
+@media (prefers-reduced-motion: reduce) {
+  .tabbar, .miniplayer { transition: none; } /* 减少动态偏好：瞬间切，不做滑动；必须写在两条 transition 之后 */
+}
+
 /* 播放条打开时给内容留出底部空隙，免得最后一行被浮条压住。padding 用的是
 !important：app.js 给 <main> 的内联 padding 简写会盖过这里的长手写。 */
 body.has-player main { padding-bottom: calc(var(--space-8) * 2.5 + 110px) !important; }

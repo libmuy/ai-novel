@@ -118,7 +118,7 @@ function fail(err) { flash("⚠ " + (err && err.message ? err.message : String(e
 // 播放状态 P 同样放在 S 之外：loadLevel() 的 Object.assign 会重置 S 的字段。
 //
 // 播放条默认收起 = 只留一个圆钮（进度环 + 随音量起伏的 5 根竖条），点圆才展开进度行
-// 与跳转键——底部导航常驻，浮条再加两行会让正文最后几行被顶起来。
+// 与跳转键——底部导航吸在最下面，浮条再加两行会让正文最后几行被顶起来。
 // 收起/展开只存在内存里，刷新即回默认收起。
 // 圆里的竖条有两套驱动：非 iOS 接 Web Audio 取真实振幅；iOS 只用 CSS 合成动画
 //（iOS 退后台会 suspend AudioContext，元素一旦接进去就撤不回原生输出 → 锁屏会静音）。
@@ -127,6 +127,10 @@ const AUDIO = document.getElementById("player-audio");
 const PL = document.getElementById("miniplayer");
 const P = { url: "", title: "", sub: "", album: "", dur: 0, error: "", rate: 1, collapsed: true };
 let PL_NODES = null;
+
+// 移动端底部三格导航的显隐，也放 S 之外（同上：loadLevel 会 Object.assign 掉 S 的字段）。
+// 下滑藏、上滑露、页顶永远露；只做 transform 位移，不改文档流，正文不会跟着跳。
+const UI = { navHidden: false, lastY: null };
 
 // 倍速锁在档位表内：iOS 对 >2 倍不稳，任意值也会让锁屏进度条的 playbackRate 失真。
 const RATES = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
@@ -858,6 +862,8 @@ function sidebar(mobile) {
   ));
   if (mobile) {
     return h("nav", {
+      class: "tabbar" + (UI.navHidden ? " is-hidden" : ""),
+      "aria-hidden": UI.navHidden ? "true" : "false",
       style: "position:sticky;bottom:0;z-index:20;display:flex;gap:var(--space-1);background:var(--color-neutral-900);"
         + "box-shadow:inset 0 1px 0 var(--color-neutral-800);padding:var(--space-1) var(--space-2) calc(var(--space-1) + env(safe-area-inset-bottom))",
     }, SEC_ORDER.map((id) => h("button", {
@@ -1217,6 +1223,21 @@ function cmdPanel() {
 
 // ---------------------------------------------------------------- 顶层渲染
 
+// 把 UI.navHidden 同步到 DOM：导航自身的 .is-hidden、无障碍的 aria-hidden、
+// body 的 .nav-hidden（CSS 靠它让播放条跟着沉到屏幕最底）。
+// 桌面端没有 .tabbar → on 恒为 false，旋转屏幕后 body 上的类会被顺手清掉。
+function applyNavHidden() {
+  const root = document.getElementById("app");
+  const bar = root && root.querySelector(".tabbar");
+  const on = !!bar && UI.navHidden;
+  document.body.classList.toggle("nav-hidden", on);
+  if (!bar) return;
+  // 焦点还留在正要藏起来的导航里会把键盘/读屏用户困住（aria-hidden 内不该有焦点）
+  if (on && bar.contains(document.activeElement) && document.activeElement.blur) document.activeElement.blur();
+  bar.classList.toggle("is-hidden", on);
+  bar.setAttribute("aria-hidden", on ? "true" : "false");
+}
+
 function render() {
   const root = document.getElementById("app");
   root.innerHTML = "";
@@ -1225,6 +1246,7 @@ function render() {
 
   if (!S.book || !S.level) {
     root.appendChild(h("div", { style: "padding:var(--space-8);color:var(--color-neutral-500)" }, S.loading ? "加载中…" : "加载失败"));
+    applyNavHidden(); // 这条分支没有导航，顺手把 body 上的类清掉
     return;
   }
 
@@ -1263,11 +1285,27 @@ function render() {
   if (mobile) { wrap.appendChild(topbarMobile()); wrap.appendChild(main); wrap.appendChild(sidebar(true)); }
   else { wrap.appendChild(sidebar(false)); wrap.appendChild(main); }
   root.appendChild(wrap);
+  applyNavHidden(); // 重建出来的导航按 UI.navHidden 补上标记（render 每 800ms 轮询一次）
 }
 
 // ---------------------------------------------------------------- 启动
 
 window.addEventListener("resize", () => { S.vw = window.innerWidth; render(); });
+
+// 底部导航：往下滚就藏起来，往上滚或回到页顶再露出来。
+// 页面滚的是 window（body 下没有 overflow 容器），scroll 事件逐帧来，够快也够省。
+// 判定走阈值而不是逐像素比，惯性滚动的细碎抖动不会让导航来回抽搐。
+window.addEventListener("scroll", () => {
+  const y = window.scrollY || 0;
+  if (UI.lastY == null) { UI.lastY = y; return; } // 第一次只记位置，不判断方向
+  const dy = y - UI.lastY;
+  UI.lastY = y;
+  if (Math.abs(dy) < 8) return; // 抖动阈值
+  const next = y < 40 ? false : dy > 0; // 页顶永远露着，方便回去点
+  if (next === UI.navHidden) return;
+  UI.navHidden = next;
+  applyNavHidden(); // 不等下一轮 render，滚动中要立刻响应
+}, { passive: true });
 
 (async function init() {
   initPlayer();
