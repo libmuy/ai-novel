@@ -314,6 +314,22 @@ textarea.input { min-height: 90px; resize: vertical; }
 .mp-btn:hover { background: var(--color-accent-600); }
 .mp-close { width: 32px; height: 32px; background: transparent; color: var(--color-neutral-400); }
 .mp-close:hover { background: color-mix(in srgb, var(--color-text) 10%, transparent); color: var(--color-text); }
+/* 后退/前进 5 秒：图标 + 秒数并排（基类是 grid，这里改回 flex 才不会上下叠） */
+.mp-skip {
+  display: inline-flex; align-items: center; justify-content: center; gap: 1px;
+  background: transparent; color: var(--color-neutral-300);
+}
+.mp-skip:hover { background: color-mix(in srgb, var(--color-text) 10%, transparent); color: var(--color-text); }
+.mp-skip-n { font-size: 10px; font-weight: 500; }
+/* 倍速：胶囊按钮，当前档位即按钮文案 */
+.mp-rate {
+  flex: none; height: 30px; padding: 0 var(--space-3);
+  border: 1px solid var(--color-divider); border-radius: 999px;
+  background: transparent; color: var(--color-accent-300);
+  font: inherit; font-size: 11.5px; font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.mp-rate:hover { background: color-mix(in srgb, var(--color-accent) 18%, transparent); }
 .mp-meta { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .mp-title {
   font-size: 13px; font-weight: 500;
@@ -332,6 +348,10 @@ textarea.input { min-height: 90px; resize: vertical; }
     left: var(--space-4); right: var(--space-4); width: auto;
     bottom: calc(64px + env(safe-area-inset-bottom)); /* 让开吸底三格导航 */
   }
+  .mp-top { gap: var(--space-2); } /* 窄屏给标题多挤一点宽度 */
+}
+@media (max-width: 399.98px) {
+  .mp-sub { display: none; } /* 小屏只留章节标题一行，文件名让位 */
 }
 
 /* 播放条打开时给内容留出底部空隙，免得最后一行被浮条压住。padding 用的是

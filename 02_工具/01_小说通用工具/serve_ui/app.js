@@ -119,8 +119,13 @@ function fail(err) { flash("⚠ " + (err && err.message ? err.message : String(e
 
 const AUDIO = document.getElementById("player-audio");
 const PL = document.getElementById("miniplayer");
-const P = { url: "", title: "", sub: "", album: "", dur: 0, error: "" };
+const P = { url: "", title: "", sub: "", album: "", dur: 0, error: "", rate: 1 };
 let PL_NODES = null;
+
+// 倍速锁在档位表内：iOS 对 >2 倍不稳，任意值也会让锁屏进度条的 playbackRate 失真。
+const RATES = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
+const RATE_KEY = "novel-review:playback-rate"; // 与上面 CR_KEY 同风格，存本机浏览器
+const SKIP_SECS = 5; // 后退/前进秒数，锁屏的 seek 动作也用它当默认步长
 
 function fmtTime(sec) {
   if (!isFinite(sec) || sec < 0) sec = 0;
@@ -128,6 +133,46 @@ function fmtTime(sec) {
   const m = Math.floor((total % 3600) / 60), s = total % 60;
   return hr ? `${hr}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}` : `${m}:${String(s).padStart(2, "0")}`;
 }
+
+function loadRate() {
+  try {
+    const v = Number(localStorage.getItem(RATE_KEY));
+    return RATES.includes(v) ? v : 1;
+  } catch (e) { return 1; } // 隐私模式等，读不到就用原速
+}
+
+function setRate(v) {
+  if (!RATES.includes(v)) v = 1;
+  P.rate = v;
+  try { AUDIO.playbackRate = v; } catch (e) { /* 忽略 */ }
+  try { localStorage.setItem(RATE_KEY, String(v)); } catch (e) { /* 忽略 */ }
+  _posSec = -1; // 锁屏进度条要连 playbackRate 一起刷新，绕开整秒节流
+  syncPositionState();
+  renderPlayer();
+}
+
+function cycleRate() {
+  const i = Math.max(0, RATES.indexOf(P.rate));
+  setRate(RATES[(i + 1) % RATES.length]);
+}
+
+function seekTo(t) {
+  if (!P.url) return;
+  const dur = isFinite(AUDIO.duration) && AUDIO.duration > 0 ? AUDIO.duration : null;
+  let v = Number(t);
+  if (!isFinite(v)) return;
+  if (v < 0) v = 0;
+  if (dur != null && v > dur) v = dur;
+  try { AUDIO.currentTime = v; } catch (e) { /* 未就绪时忽略 */ }
+  _posSec = -1;
+  // seek 后 timeupdate 未必立刻来，进度与时间就地更新
+  if (PL_NODES && PL_NODES.range && PL_NODES.cur) {
+    PL_NODES.range.value = String(v);
+    PL_NODES.cur.textContent = fmtTime(v);
+  }
+}
+
+function seekBy(delta) { seekTo((AUDIO.currentTime || 0) + delta); }
 
 // 锁屏/通知栏封面：画一张 256×256 的波形图，失败就当作没有封面。
 let _playerArt = null;
@@ -199,6 +244,7 @@ function loadTrack(url, title, sub) {
   P.url = url; P.title = title; P.sub = sub || ""; P.album = rawPath(); P.dur = 0; P.error = "";
   _posSec = -1;
   AUDIO.src = url;
+  try { AUDIO.playbackRate = P.rate; } catch (e) { /* 个别浏览器换源会复位，重设一次 */ }
   updateMediaSession();
   return true;
 }
@@ -271,6 +317,17 @@ function renderPlayer() {
     "aria-label": playing ? "暂停" : "播放", onClick: togglePlayer,
   }, icon(playing ? "ph-pause" : "ph-play", 18));
   playBtn.dataset.playing = String(playing);
+  const skipBtn = (dir) => h("button", {
+    class: "mp-btn mp-skip", type: "button",
+    title: dir < 0 ? `后退 ${SKIP_SECS} 秒` : `前进 ${SKIP_SECS} 秒`,
+    "aria-label": dir < 0 ? `后退 ${SKIP_SECS} 秒` : `前进 ${SKIP_SECS} 秒`,
+    onClick: () => seekBy(dir * SKIP_SECS),
+  }, icon(dir < 0 ? "ph-arrow-counter-clockwise" : "ph-arrow-clockwise", 15),
+     h("span", { class: "mp-skip-n mono" }, String(SKIP_SECS)));
+  const rateBtn = h("button", {
+    class: "mp-rate", type: "button", title: "播放倍速（点击切换）",
+    "aria-label": `播放倍速 ${P.rate} 倍，点击切换`, onClick: cycleRate,
+  }, `${P.rate}×`);
   const closeBtn = h("button", {
     class: "mp-btn mp-close", type: "button", title: "关闭播放器", "aria-label": "关闭播放器", onClick: closePlayer,
   }, icon("ph-x", 16));
@@ -278,14 +335,14 @@ function renderPlayer() {
   const dur = h("span", { class: "mp-time mono" }, fmtTime(P.dur));
 
   PL.appendChild(h("div", { class: "mp-top" },
-    playBtn,
+    skipBtn(-1), playBtn, skipBtn(1),
     h("div", { class: "mp-meta" },
       h("div", { class: "mp-title" }, P.title || "正在播放"),
       h("div", { class: "mp-sub" }, P.sub || "")),
-    closeBtn));
+    rateBtn, closeBtn));
   if (P.error) PL.appendChild(h("div", { class: "mp-error" }, P.error));
   PL.appendChild(h("div", { class: "mp-seek" }, cur, range, dur));
-  PL_NODES = { range, cur, playBtn, dragging: false };
+  PL_NODES = { range, cur, playBtn, rateBtn, dragging: false };
 }
 
 function onPlayerState() {
@@ -296,6 +353,8 @@ function onPlayerState() {
 }
 
 function initPlayer() {
+  P.rate = loadRate();
+  try { AUDIO.playbackRate = P.rate; } catch (e) { /* 忽略 */ }
   AUDIO.addEventListener("play", onPlayerState);
   AUDIO.addEventListener("pause", onPlayerState);
   AUDIO.addEventListener("ended", onPlayerState);
@@ -323,9 +382,10 @@ function initPlayer() {
     const set = (name, fn) => { try { ms.setActionHandler(name, fn); } catch (e) { /* 不支持则跳过 */ } };
     set("play", () => { if (P.url) { const pr = AUDIO.play(); if (pr && pr.catch) pr.catch(() => {}); } });
     set("pause", () => AUDIO.pause());
-    set("seekbackward", (d) => { const off = (d && d.seekOffset) || 10; try { AUDIO.currentTime = Math.max(0, AUDIO.currentTime - off); } catch (e) {} });
-    set("seekforward", (d) => { const off = (d && d.seekOffset) || 30; try { AUDIO.currentTime = Math.min(AUDIO.duration || 1e9, AUDIO.currentTime + off); } catch (e) {} });
-    set("seekto", (d) => { if (d && typeof d.seekTime === "number") { try { AUDIO.currentTime = d.seekTime; } catch (e) {} } });
+    // 系统给了 seekOffset 就用系统的，否则与界面按钮一致按 5 秒
+    set("seekbackward", (d) => seekBy(-((d && d.seekOffset) || SKIP_SECS)));
+    set("seekforward", (d) => seekBy((d && d.seekOffset) || SKIP_SECS));
+    set("seekto", (d) => { if (d && typeof d.seekTime === "number") seekTo(d.seekTime); });
   }
   renderPlayer();
 }
