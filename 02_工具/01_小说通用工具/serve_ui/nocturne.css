@@ -303,8 +303,57 @@ textarea.input { min-height: 90px; resize: vertical; }
   border-radius: var(--radius-lg);
   background: var(--color-surface);
   box-shadow: var(--shadow-md);
+  overflow: hidden; /* 长标题/长错误文案贴圆角时裁齐 */
 }
 .miniplayer[hidden] { display: none; }
+
+/* 收起态：整个播放条退化成一个圆钮。容器不再自带底色/圆角/阴影，圆钮自己画，
+   这样底色、阴影、进度环都在一个元素上，不会出现"方盒子外面套个圆"。 */
+body.player-collapsed .miniplayer {
+  width: 56px; height: 56px; left: auto; padding: 0;
+  border-radius: 50%; background: transparent; box-shadow: none; overflow: visible;
+}
+.mp-fab {
+  position: relative; display: grid; place-items: center;
+  width: 56px; height: 56px; padding: 0; border: 0; border-radius: 50%;
+  background: var(--color-surface); box-shadow: var(--shadow-md);
+  cursor: pointer; font: inherit;
+}
+.mp-fab-ring, .mp-fab-core { position: absolute; border-radius: 50%; }
+/* 进度环：conic-gradient 从正上方顺时针铺 --mp-p（0~100）的弧，剩下的当轨道 */
+.mp-fab-ring {
+  inset: 0;
+  background: conic-gradient(var(--color-accent) calc(var(--mp-p, 0) * 1%), var(--color-neutral-800) 0);
+}
+.mp-fab-core { inset: 3px; background: var(--color-surface); }
+.mp-fab > i { position: relative; z-index: 1; color: var(--color-text); } /* 只命中加载失败的警告图标 */
+.mp-fab:hover { box-shadow: var(--shadow-lg); }
+
+/* 圆心的 5 根竖条：CSS 关键帧（iOS / 未接线）或真实音量 --eq（data-eq=real） */
+.mp-eq {
+  position: relative; z-index: 1;
+  display: flex; align-items: center; gap: 3px; height: 22px;
+}
+.mp-eq i {
+  flex: none;
+  width: 3px; height: 22px; border-radius: 2px;
+  background: var(--color-accent);
+  transform-origin: center; transform: scaleY(var(--eq, .12));
+  animation: mp-eq .68s ease-in-out infinite alternate;
+}
+.mp-eq i:nth-child(1) { animation-duration: .54s; animation-delay: -.10s; }
+.mp-eq i:nth-child(2) { animation-duration: .74s; animation-delay: -.32s; }
+.mp-eq i:nth-child(3) { animation-duration: .62s; animation-delay: -.05s; }
+.mp-eq i:nth-child(4) { animation-duration: .82s; animation-delay: -.48s; }
+.mp-eq i:nth-child(5) { animation-duration: .70s; animation-delay: -.24s; }
+/* 真音量模式：关掉关键帧，改由 JS 写的 --eq 决定每根的高度 */
+.mp-fab[data-eq="real"] .mp-eq i { animation: none; transform: scaleY(var(--eq, .12)); }
+/* 没在播就压成一条平线，一眼看得出停着 */
+.mp-fab[data-playing="false"] .mp-eq i { animation: none; transform: scaleY(.12) !important; }
+@keyframes mp-eq { from { transform: scaleY(.18); } to { transform: scaleY(1); } }
+@media (prefers-reduced-motion: reduce) {
+  .mp-eq i { animation: none; transform: scaleY(.45); }
+}
 .mp-top { display: flex; align-items: center; gap: var(--space-3); }
 .mp-btn {
   flex: none; display: grid; place-items: center; width: 38px; height: 38px;
@@ -330,7 +379,16 @@ textarea.input { min-height: 90px; resize: vertical; }
   cursor: pointer;
 }
 .mp-rate:hover { background: color-mix(in srgb, var(--color-accent) 18%, transparent); }
-.mp-meta { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+/* 标题块 = 开合按钮（收起点它展开，展开点它收起） */
+.mp-meta {
+  flex: 1 1 auto; min-width: 0;
+  display: flex; align-items: center; gap: var(--space-2);
+  border: 0; background: transparent; padding: 0; margin: 0;
+  font: inherit; color: inherit; text-align: left; cursor: pointer;
+}
+.mp-meta-text { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.mp-meta > i { flex: none; color: var(--color-neutral-500); }
+.mp-meta:hover > i { color: var(--color-text); }
 .mp-title {
   font-size: 13px; font-weight: 500;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -359,4 +417,11 @@ textarea.input { min-height: 90px; resize: vertical; }
 body.has-player main { padding-bottom: calc(var(--space-8) * 2.5 + 110px) !important; }
 @media (max-width: 719.98px) {
   body.has-player main { padding-bottom: 150px !important; }
+}
+
+/* 收起态只剩右下角一个 56px 的圆，留白跟着减：圆顶 ≈ 底部 120px（移动端）/
+   73px（桌面），留白按此再加十来像素的呼吸缝。 */
+body.has-player.player-collapsed main { padding-bottom: calc(var(--space-8) * 2.5 + 40px) !important; }
+@media (max-width: 719.98px) {
+  body.has-player.player-collapsed main { padding-bottom: 76px !important; }
 }

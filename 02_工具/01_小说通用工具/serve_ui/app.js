@@ -116,16 +116,43 @@ function fail(err) { flash("⚠ " + (err && err.message ? err.message : String(e
 // 音频元素与播放条挂在 index.html 的 #app 之外，render() 永远碰不到它们，
 // 所以切章 / 切区 / 切文件 / 任务轮询（每 800ms 一次 render）都不会中断播放。
 // 播放状态 P 同样放在 S 之外：loadLevel() 的 Object.assign 会重置 S 的字段。
+//
+// 播放条默认收起 = 只留一个圆钮（进度环 + 随音量起伏的 5 根竖条），点圆才展开进度行
+// 与跳转键——底部导航常驻，浮条再加两行会让正文最后几行被顶起来。
+// 收起/展开只存在内存里，刷新即回默认收起。
+// 圆里的竖条有两套驱动：非 iOS 接 Web Audio 取真实振幅；iOS 只用 CSS 合成动画
+//（iOS 退后台会 suspend AudioContext，元素一旦接进去就撤不回原生输出 → 锁屏会静音）。
 
 const AUDIO = document.getElementById("player-audio");
 const PL = document.getElementById("miniplayer");
-const P = { url: "", title: "", sub: "", album: "", dur: 0, error: "", rate: 1 };
+const P = { url: "", title: "", sub: "", album: "", dur: 0, error: "", rate: 1, collapsed: true };
 let PL_NODES = null;
 
 // 倍速锁在档位表内：iOS 对 >2 倍不稳，任意值也会让锁屏进度条的 playbackRate 失真。
 const RATES = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
 const RATE_KEY = "novel-review:playback-rate"; // 与上面 CR_KEY 同风格，存本机浏览器
 const SKIP_SECS = 5; // 后退/前进秒数，锁屏的 seek 动作也用它当默认步长
+
+// ---- 圆钮竖条动画的驱动开关 ------------------------------------------
+// iOS（含 Chrome iOS，底层就是 WKWebView）默认走 CSS 合成动画；`?eq=1` / `?eq=0`
+// 可以覆盖一次并记住，方便在 iPhone 上实测真音量。开关只决定「要不要尝试接线」，
+// 实际显示以 EQ.an 是否接成（fab 的 data-eq）为准——关了开关但图还挂着不算数。
+const IS_IOS = /iP(hone|ad|od)/.test(navigator.userAgent || "")
+  || (navigator.platform === "MacIntel" && (navigator.maxTouchPoints || 0) > 1);
+const EQ_KEY = "novel-review:eq-visualizer"; // "1"=真音量 "0"=CSS，同 RATE_KEY 风格
+const EQ = { ctx: null, src: null, an: null, data: null, raf: 0, bars: [] };
+let EQ_ON = wantRealEq(); // 本会话一旦接线失败就永久关掉
+
+function wantRealEq() {
+  try {
+    const q = new URLSearchParams(typeof location === "object" && location ? location.search || "" : "")
+      .get("eq");
+    if (q === "1" || q === "0") { localStorage.setItem(EQ_KEY, q); return q === "1"; }
+    const saved = localStorage.getItem(EQ_KEY);
+    if (saved === "1" || saved === "0") return saved === "1";
+  } catch (e) { /* 隐私模式等，读写都可能失败 */ }
+  return !IS_IOS;
+}
 
 function fmtTime(sec) {
   if (!isFinite(sec) || sec < 0) sec = 0;
@@ -170,9 +197,94 @@ function seekTo(t) {
     PL_NODES.range.value = String(v);
     PL_NODES.cur.textContent = fmtTime(v);
   }
+  updateProgressVisual();
 }
 
 function seekBy(delta) { seekTo((AUDIO.currentTime || 0) + delta); }
+
+// 收起态圆钮的进度环：--mp-p 是 0~100 的百分数，conic-gradient 用它画弧。
+function updateProgressVisual() {
+  if (!PL_NODES || !PL_NODES.fab) return;
+  const d = isFinite(AUDIO.duration) && AUDIO.duration > 0
+    ? AUDIO.duration : (P.dur || 0);
+  const p = d > 0 ? Math.min(1, Math.max(0, (AUDIO.currentTime || 0) / d)) : 0;
+  PL_NODES.fab.style.setProperty("--mp-p", (p * 100).toFixed(2));
+}
+
+// ---- 圆钮竖条：真实音量驱动 -------------------------------------------
+// 只在 AudioContext 真的 running 时才接线——接线是单程的（createMediaElementSource
+// 撤不回原生输出），接到挂起的上下文上就是静音（WebKit 231105/237878/261554 的老坑）。
+// 所以这里宁可不接、退回 CSS 合成动画，也不拿「锁屏/后台不断播」去赌。
+const EQ_BANDS = [[1, 6], [6, 14], [14, 30], [30, 60], [60, 110]]; // 频段 bin 下标，低→高
+
+function ensureEqGraph() {
+  if (!EQ_ON) return;
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) { EQ_ON = false; return; }
+    // WebKit 给 AudioContext 留的后台豁免口子（仅接线路径里设，不外溢到别处）
+    if (navigator.audioSession) navigator.audioSession.type = "playback";
+    if (!EQ.ctx) EQ.ctx = new AC();
+    const kick = EQ.ctx.state === "running"
+      ? Promise.resolve() : EQ.ctx.resume().catch(() => null);
+    kick.then(() => {
+      if (!EQ.ctx || EQ.ctx.state !== "running") return; // 还没 running：下次手势再试
+      if (EQ.src) { setEqMode(); return; }               // 已接线，只同步显示模式
+      try {
+        EQ.src = EQ.ctx.createMediaElementSource(AUDIO);  // 同一元素接两次会抛
+        EQ.an = EQ.ctx.createAnalyser();
+        EQ.an.fftSize = 256;
+        EQ.an.smoothingTimeConstant = 0.6;
+        EQ.src.connect(EQ.an);
+        EQ.an.connect(EQ.ctx.destination);
+        EQ.data = new Uint8Array(EQ.an.frequencyBinCount);
+      } catch (e) {
+        EQ_ON = false; EQ.src = null; EQ.an = null; EQ.data = null;
+        setEqMode();
+        return;
+      }
+      setEqMode();
+    });
+  } catch (e) { EQ_ON = false; }
+}
+
+// 竖条的显示模式以「是否真接成 + 上下文是否还活着」为准，不看用户偏好
+function setEqMode() {
+  const fab = PL_NODES && PL_NODES.fab;
+  if (!fab) return;
+  const real = !!(EQ.an && EQ.ctx && EQ.ctx.state === "running");
+  fab.dataset.eq = real ? "real" : "css";
+  if (real) startEq(); else stopEq();
+}
+
+function eqFrame() {
+  EQ.raf = 0;
+  if (!EQ.an || !EQ.data || !EQ.bars.length) return;
+  if (!EQ.ctx || EQ.ctx.state !== "running" || document.hidden
+      || !P.collapsed || !P.url || AUDIO.paused || AUDIO.ended) { stopEq(); return; }
+  try { EQ.an.getByteFrequencyData(EQ.data); } catch (e) { stopEq(); return; }
+  for (let i = 0; i < EQ.bars.length; i++) {
+    const band = EQ_BANDS[i] || EQ_BANDS[EQ_BANDS.length - 1];
+    let sum = 0, n = 0;
+    for (let k = band[0]; k < band[1] && k < EQ.data.length; k++) { sum += EQ.data[k]; n++; }
+    const raw = n ? Math.min(1, (sum / n) / 160) : 0;
+    const prev = Number(EQ.bars[i].style.getPropertyValue("--eq")) || 0.12;
+    // 快起慢落：涨立刻跟上，落要拖一点，看着才像在"喘"
+    EQ.bars[i].style.setProperty("--eq", (raw > prev ? raw : prev * 0.86).toFixed(3));
+  }
+  EQ.raf = requestAnimationFrame(eqFrame);
+}
+
+function startEq() {
+  if (EQ.raf || !EQ.an || !P.url || !P.collapsed || document.hidden) return;
+  if (AUDIO.paused || AUDIO.ended) return;
+  if (EQ.ctx && EQ.ctx.state !== "running") { setEqMode(); return; }
+  EQ.raf = requestAnimationFrame(eqFrame);
+}
+
+function stopEq() {
+  if (EQ.raf) { cancelAnimationFrame(EQ.raf); EQ.raf = 0; }
+}
 
 // 锁屏/通知栏封面：画一张 256×256 的波形图，失败就当作没有封面。
 let _playerArt = null;
@@ -250,6 +362,7 @@ function loadTrack(url, title, sub) {
 }
 
 function playTrack(url, title, sub) {
+  ensureEqGraph(); // 趁这次用户手势把 AudioContext 起来（iOS 默认 EQ_ON=false，直接返回）
   loadTrack(url, title, sub);
   const pr = AUDIO.play();
   if (pr && pr.catch) pr.catch((e) => { P.error = "无法播放：" + (e && e.message ? e.message : String(e)); renderPlayer(); });
@@ -259,6 +372,7 @@ function playTrack(url, title, sub) {
 function togglePlayer() {
   if (!P.url) return;
   if (AUDIO.paused || AUDIO.ended) {
+    ensureEqGraph(); // 恢复播放也是一次手势，上下文被挂起过就趁这次重试
     const pr = AUDIO.play();
     if (pr && pr.catch) pr.catch((e) => { P.error = "无法播放：" + (e && e.message ? e.message : String(e)); renderPlayer(); });
   } else AUDIO.pause();
@@ -269,6 +383,8 @@ function closePlayer() {
   AUDIO.removeAttribute("src");
   try { AUDIO.load(); } catch (e) { /* 释放媒体资源，失败无所谓 */ }
   P.url = ""; P.title = ""; P.sub = ""; P.album = ""; P.dur = 0; P.error = ""; _posSec = -1;
+  stopEq();
+  EQ.bars = [];
   const ms = mediaSession();
   if (ms) { try { ms.metadata = null; ms.playbackState = "none"; } catch (e) { /* 忽略 */ } }
   renderPlayer();
@@ -276,8 +392,19 @@ function closePlayer() {
 }
 
 function refreshPlayerButton() {
-  if (!PL_NODES || !PL_NODES.playBtn) { renderPlayer(); return; }
   const playing = !AUDIO.paused && !AUDIO.ended;
+  if (PL_NODES && PL_NODES.fab) {
+    // 收起态只有一个圆：点它展开，不直接控播放；竖条起伏交给 rAF（真音量）或 CSS 关键帧
+    const b = PL_NODES.fab;
+    if (b.dataset.playing !== String(playing)) {
+      b.dataset.playing = String(playing);
+      b.title = playing ? "播放中 · 点开看控制条" : "已暂停 · 点开看控制条";
+      b.setAttribute("aria-label", b.title);
+    }
+    if (playing) startEq(); else stopEq();
+    return;
+  }
+  if (!PL_NODES || !PL_NODES.playBtn) { renderPlayer(); return; }
   const b = PL_NODES.playBtn;
   if (b.dataset.playing === String(playing)) return;
   b.dataset.playing = String(playing);
@@ -290,10 +417,37 @@ function refreshPlayerButton() {
 function renderPlayer() {
   PL_NODES = null;
   document.body.classList.toggle("has-player", !!P.url);
+  document.body.classList.toggle("player-collapsed", !!P.url && P.collapsed);
   if (!P.url) { PL.hidden = true; PL.innerHTML = ""; return; }
   PL.hidden = false;
   PL.innerHTML = "";
   const playing = !AUDIO.paused && !AUDIO.ended;
+
+  // 收起态：整个播放条只画一个圆——进度环 + 5 根随音量起伏的竖条，点圆展开控制条
+  if (P.collapsed) {
+    const tip = P.error ? "音频加载失败 · 点开看详情"
+      : (playing ? "播放中 · 点开看控制条" : "已暂停 · 点开看控制条");
+    const eq = h("span", { class: "mp-eq", "aria-hidden": "true" },
+      [0, 1, 2, 3, 4].map(() => h("i", { style: "--eq:.12" })));
+    const fab = h("button", {
+      class: "mp-fab", type: "button", "aria-expanded": "false",
+      title: tip, "aria-label": tip,
+      onClick: () => { P.collapsed = false; renderPlayer(); },
+    },
+      h("span", { class: "mp-fab-ring", "aria-hidden": "true" }),
+      h("span", { class: "mp-fab-core", "aria-hidden": "true" }),
+      P.error ? icon("ph-warning-octagon", 22) : eq);
+    fab.dataset.playing = String(playing);
+    PL.appendChild(fab);
+    EQ.bars = P.error ? [] : eq.children;
+    PL_NODES = { fab, range: null, cur: null, playBtn: null, rateBtn: null, dragging: false };
+    updateProgressVisual();
+    setEqMode(); // 真音量已接成 → data-eq=real 并起 rAF；否则 data-eq=css 走关键帧
+    if (!EQ.an && EQ_ON) ensureEqGraph(); // 没接过线就趁这次手势接（iOS 默认不会走到这）
+    return;
+  }
+  stopEq(); // 展开态没有竖条可画
+
   const range = h("input", {
     class: "mp-range", type: "range", min: "0",
     max: String(P.dur > 0 ? P.dur : 100), step: "any",
@@ -331,15 +485,21 @@ function renderPlayer() {
   const closeBtn = h("button", {
     class: "mp-btn mp-close", type: "button", title: "关闭播放器", "aria-label": "关闭播放器", onClick: closePlayer,
   }, icon("ph-x", 16));
+  // 展开态：标题块仍是开合按钮，点它收起回一个圆
+  const meta = h("button", {
+    class: "mp-meta", type: "button",
+    title: "收起播放控制", "aria-expanded": "true",
+    onClick: () => { P.collapsed = true; renderPlayer(); },
+  },
+    h("div", { class: "mp-meta-text" },
+      h("div", { class: "mp-title" }, P.title || "正在播放"),
+      h("div", { class: "mp-sub" }, P.sub || "")),
+    icon("ph-caret-up", 14));
   const cur = h("span", { class: "mp-time mono" }, fmtTime(AUDIO.currentTime));
   const dur = h("span", { class: "mp-time mono" }, fmtTime(P.dur));
 
   PL.appendChild(h("div", { class: "mp-top" },
-    skipBtn(-1), playBtn, skipBtn(1),
-    h("div", { class: "mp-meta" },
-      h("div", { class: "mp-title" }, P.title || "正在播放"),
-      h("div", { class: "mp-sub" }, P.sub || "")),
-    rateBtn, closeBtn));
+    skipBtn(-1), playBtn, skipBtn(1), meta, rateBtn, closeBtn));
   if (P.error) PL.appendChild(h("div", { class: "mp-error" }, P.error));
   PL.appendChild(h("div", { class: "mp-seek" }, cur, range, dur));
   PL_NODES = { range, cur, playBtn, rateBtn, dragging: false };
@@ -365,10 +525,11 @@ function initPlayer() {
     renderPlayer();
   });
   AUDIO.addEventListener("timeupdate", () => {
-    if (PL_NODES && !PL_NODES.dragging) {
+    if (PL_NODES && !PL_NODES.dragging && PL_NODES.range && PL_NODES.cur) {
       PL_NODES.range.value = String(AUDIO.currentTime);
       PL_NODES.cur.textContent = fmtTime(AUDIO.currentTime);
     }
+    updateProgressVisual();
     syncPositionState();
   });
   AUDIO.addEventListener("error", () => {
@@ -387,6 +548,16 @@ function initPlayer() {
     set("seekforward", (d) => seekBy((d && d.seekOffset) || SKIP_SECS));
     set("seekto", (d) => { if (d && typeof d.seekTime === "number") seekTo(d.seekTime); });
   }
+  // 切后台/回前台：竖条 rAF 只在前台跑；回前台若上下文被挂起，试着拉回来——
+  // 拉不动也不碰播放（视觉退回 CSS 关键帧，声音要彻底恢复只需刷新页面）。
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) { stopEq(); return; }
+    if (EQ.ctx && EQ.ctx.state !== "running") {
+      Promise.resolve(EQ.ctx.resume().catch(() => null)).then(() => setEqMode());
+      return;
+    }
+    setEqMode();
+  });
   renderPlayer();
 }
 
