@@ -95,7 +95,7 @@ function setColdEngine(engine) { S.cr = { ...S.cr, engine }; saveCR(S.cr); rende
 const S = {
   sec: "work", part: null, vol: null, ch: null, hist: [],
   book: null, level: null, config: null, loading: true,
-  file: null, fileData: null, fedit: null,
+  file: null, fileData: null, fedit: null, fileToken: 0,
   editingAddr: false, addr: "",
   flash: "", confirmDel: false,
   cmd: null, note: "", forceRegen: false,
@@ -581,7 +581,7 @@ function curKey() { return { sec: S.sec, part: S.part, vol: S.vol, ch: S.ch }; }
 async function loadLevel(patch, pushHist) {
   if (pushHist) S.hist = [...S.hist, curKey()].slice(-30);
   Object.assign(S, patch, {
-    file: null, fileData: null, fedit: null, cmd: null, note: "",
+    file: null, fileData: null, fedit: null, fileToken: S.fileToken + 1, cmd: null, note: "",
     flash: "", editingAddr: false, confirmDel: false, pane: "list",
     backfillTargets: null, loading: true,
   });
@@ -646,6 +646,10 @@ function dirname(p) { const i = p.lastIndexOf("/"); return i < 0 ? "" : p.slice(
 function basename(p) { const i = p.lastIndexOf("/"); return i < 0 ? p : p.slice(i + 1); }
 
 async function refreshAll(keepFile) {
+  // token：进来时先记一下当前文件请求的版本号，等下面的 await 落地时如果版本号已经
+  // 变了（用户在这期间点开了别的文件，或翻页离开），说明这份响应已经过期，不能再往
+  // S.fileData 里写——否则会出现地址是新文件、内容却是旧文件那种错位。
+  const token = S.fileToken;
   try {
     const [level, book] = await Promise.all([
       API.level(S.sec, S.part, S.vol, S.ch),
@@ -653,19 +657,26 @@ async function refreshAll(keepFile) {
     ]);
     S.level = level; S.book = book;
     if (keepFile && S.file) {
-      try { S.fileData = await API.file(S.file); }
-      catch (e) { S.file = null; S.fileData = null; }
+      const path = S.file;
+      try {
+        const data = await API.file(path);
+        if (S.fileToken === token && S.file === path) S.fileData = data;
+      } catch (e) {
+        if (S.fileToken === token && S.file === path) { S.file = null; S.fileData = null; }
+      }
     }
   } catch (e) { fail(e); }
   render();
 }
 
 async function selectFile(path) {
+  const token = ++S.fileToken;
   setState({ pane: S.vw < 720 ? "preview" : S.pane });
   try {
     const data = await API.file(path);
+    if (S.fileToken !== token) return; // 期间又点开了别的文件，这份响应已经过期
     setState({ file: path, fileData: data, fedit: null, pane: S.vw < 720 ? "preview" : S.pane });
-  } catch (e) { fail(e); }
+  } catch (e) { if (S.fileToken === token) fail(e); }
 }
 
 function startFileEdit() {
