@@ -707,15 +707,52 @@ async function saveFileEdit() {
   await selectFile(newPath);
 }
 
+// 复制文本 → 返回 "" 表示成功，否则返回给用户看的失败文案。
+// navigator.clipboard 只在安全上下文（https 或 http://localhost）里存在，而审查台默认
+// 监听 0.0.0.0、控制台打印的入口又是 http://<局域网IP>:8765：非回环的 http 页面里
+// clipboard 根本是 undefined，writeText 一调就抛，旧代码一律报「浏览器拒绝了剪贴板权限」，
+// 把「地址不是安全上下文」说成了「权限被拒」，用户没处下手。
+// 所以：安全上下文才走标准 API；否则（或标准 API 被拒）回退 <textarea> +
+// document.execCommand("copy")——它不要求安全上下文，且仍在点击手势里；两条路都失败
+// 才如实报错并给出可操作的下一步。
+async function copyText(text) {
+  let apiDenied = false;
+  if (window.isSecureContext && navigator.clipboard) {
+    try { await navigator.clipboard.writeText(text); return ""; }
+    catch (e) { apiDenied = true; }
+  }
+  try {
+    const prev = document.activeElement; // 复制完把焦点还给按钮，键盘用户不会掉回 body
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.cssText = "position:fixed;top:0;left:0;width:1px;height:1px;margin:0;padding:0;"
+      + "border:0;opacity:0;pointer-events:none";
+    document.body.appendChild(ta);
+    ta.select();
+    try { ta.setSelectionRange(0, text.length); } catch (e) { /* 部分浏览器不认，select() 已够 */ }
+    const ok = document.execCommand("copy");
+    ta.remove();
+    if (prev && prev.focus) prev.focus();
+    if (ok) return "";
+  } catch (e) { /* 回退也失败 → 走下面的报错 */ }
+  if (!window.isSecureContext) {
+    return "复制失败：当前地址不是安全上下文（http + 局域网 IP），浏览器禁用剪贴板 API。"
+      + "改用 http://localhost:8765 打开，或手动选中文字按 Ctrl/⌘+C。";
+  }
+  if (apiDenied) return "复制失败：浏览器拒绝了剪贴板权限（点地址栏左侧图标可改权限）。";
+  return "复制失败：浏览器不支持自动复制，请手动选中文字按 Ctrl/⌘+C。";
+}
+
 async function copyFile() {
-  try { await navigator.clipboard.writeText(S.fileData.text || ""); flash(`已复制 ${basename(S.file)}`); }
-  catch (e) { flash("复制失败：浏览器拒绝了剪贴板权限"); }
+  const err = await copyText(S.fileData.text || "");
+  flash(err ? "⚠ " + err : `已复制 ${basename(S.file)}`);
 }
 
 async function copyPath() {
   const path = rawPath();
-  try { await navigator.clipboard.writeText(path); flash(`已复制路径：${path}`); }
-  catch (e) { flash("复制失败：浏览器拒绝了剪贴板权限"); }
+  const err = await copyText(path);
+  flash(err ? "⚠ " + err : `已复制路径：${path}`);
 }
 
 async function doDelete() {
@@ -1233,8 +1270,8 @@ function cmdPanel() {
           class: "btn btn-primary", style: "font-size:13px",
           onClick: async () => {
             const extra = S.note.trim() ? `\n\n【附加要求】${S.note.trim()}` : "";
-            try { await navigator.clipboard.writeText(S.fileData.text + extra); flash("提示词已复制，可直接粘贴到云端模型"); }
-            catch (e) { flash("复制失败：浏览器拒绝了剪贴板权限"); }
+            const err = await copyText(S.fileData.text + extra);
+            flash(err ? "⚠ " + err : "提示词已复制，可直接粘贴到云端模型");
           },
         }, icon("ph-copy", 15), "复制提示词")) : null);
   } else if (cmdId === "backfill") {
