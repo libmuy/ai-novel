@@ -903,23 +903,31 @@ function sidebar(mobile) {
     }, icon(SEC_ICON[id], 20), h("span", { style: "font-size:11px" }, { work: "工作区", plan: "规划", text: "正文" }[id]))));
   }
   const meta = S.book ? S.book.meta : { parts: 0, vols: 0, chapters: 0 };
+  // 滚动窗口时左栏固定：aside 自身仍按 wrap 的 align-items:stretch 拉到整页高（左边缘
+  // 深色底不会随滚动断掉），只有里面这层做 sticky 跟着视口走——书名、分区导航、播客
+  // 订阅读多长正文都钉在原位，不用滚回页顶切区。min-height:100vh 让「播客订阅」在内容
+  // 不足一屏时仍贴在可见栏的下沿（margin-top:auto 的落点），不加内滚，整页仍只有一个滚动条。
   return h("aside", {
     style: "flex:0 1 216px;min-width:190px;background:var(--color-neutral-900);box-shadow:inset -1px 0 0 var(--color-neutral-800);"
-      + "padding:var(--space-8) var(--space-6);display:flex;flex-direction:column;gap:var(--space-8)",
+      + "display:flex;flex-direction:column",
   },
-    h("div", {},
-      h("div", { style: "display:flex;align-items:center;gap:var(--space-2);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--color-neutral-500)" },
-        icon("ph-eye", 14), "审查台"),
-      h("div", { style: "font-family:var(--font-heading);font-weight:var(--font-heading-weight);font-size:19px;margin-top:var(--space-2);line-height:1.3" },
-        S.book ? S.book.title : "…"),
-      h("div", { style: "font-size:12px;color:var(--color-neutral-500);margin-top:var(--space-1)" },
-        `${meta.parts} 部 · ${meta.vols} 卷 · ${meta.chapters} 章`)),
-    h("nav", { style: "display:flex;flex-direction:column;gap:var(--space-1)" }, navItems),
-    h("div", { style: "margin-top:auto;display:flex;flex-direction:column;gap:var(--space-3)" },
-      h("div", { style: "display:flex;align-items:center;gap:var(--space-2);font-size:11px;color:var(--color-neutral-500);letter-spacing:.08em" },
-        icon("ph-rss-simple", 13), "播客订阅"),
-      h("code", { class: "mono", style: "font-size:11px;color:var(--color-accent-300);background:var(--color-surface);border-radius:var(--radius-sm);padding:var(--space-2) var(--space-3);word-break:break-all" },
-        S.book ? S.book.feed_url : "")));
+    h("div", {
+      style: "position:sticky;top:0;min-height:100vh;display:flex;flex-direction:column;gap:var(--space-8);"
+        + "padding:var(--space-8) var(--space-6)",
+    },
+      h("div", {},
+        h("div", { style: "display:flex;align-items:center;gap:var(--space-2);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--color-neutral-500)" },
+          icon("ph-eye", 14), "审查台"),
+        h("div", { style: "font-family:var(--font-heading);font-weight:var(--font-heading-weight);font-size:19px;margin-top:var(--space-2);line-height:1.3" },
+          S.book ? S.book.title : "…"),
+        h("div", { style: "font-size:12px;color:var(--color-neutral-500);margin-top:var(--space-1)" },
+          `${meta.parts} 部 · ${meta.vols} 卷 · ${meta.chapters} 章`)),
+      h("nav", { style: "display:flex;flex-direction:column;gap:var(--space-1)" }, navItems),
+      h("div", { style: "margin-top:auto;display:flex;flex-direction:column;gap:var(--space-3)" },
+        h("div", { style: "display:flex;align-items:center;gap:var(--space-2);font-size:11px;color:var(--color-neutral-500);letter-spacing:.08em" },
+          icon("ph-rss-simple", 13), "播客订阅"),
+        h("code", { class: "mono", style: "font-size:11px;color:var(--color-accent-300);background:var(--color-surface);border-radius:var(--radius-sm);padding:var(--space-2) var(--space-3);word-break:break-all" },
+          S.book ? S.book.feed_url : ""))));
 }
 
 function topbarMobile() {
