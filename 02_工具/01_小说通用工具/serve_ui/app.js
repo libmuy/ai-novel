@@ -974,7 +974,10 @@ function titleBlock() {
 
 // ---------------------------------------------------------------- 渲染：文件列表 + 下级导航
 
-function fileList() {
+// sticky=true（桌面端）：文件列表钉在页头下面，长正文读到多深都还在手边。
+// 自带 max-height + 内滚是给「列表比屏幕还长」（根/部级的章节列表）兜底——
+// 钉住的元素不随页面走，不封顶的话底部条目永远够不着；列表短时不会出现滚动条。
+function fileList(sticky) {
   const l = S.level;
   const groups = (l.file_groups || []).map((g) => h("div", {},
     h("div", { style: "display:flex;align-items:center;gap:var(--space-2);font-size:11px;letter-spacing:.1em;color:var(--color-neutral-500);padding:0 var(--space-1) var(--space-3)" },
@@ -1010,7 +1013,13 @@ function fileList() {
   }
 
   const isEmpty = groups.length === 0 && !childrenBlock;
-  return h("div", { style: "flex:1 1 240px;min-width:220px;display:flex;flex-direction:column;gap:var(--space-8)" },
+  const listStyle = "flex:1 1 240px;min-width:220px;display:flex;flex-direction:column;gap:var(--space-8)"
+    + (sticky
+      ? ";position:sticky;top:var(--head-h,130px);align-self:flex-start;"
+        + "max-height:calc(100vh - var(--head-h,130px));max-height:calc(100dvh - var(--head-h,130px));"
+        + "overflow-y:auto;overscroll-behavior:contain"
+      : "");
+  return h("div", { class: "file-list", style: listStyle },
     groups, childrenBlock,
     isEmpty ? h("div", { style: "font-size:13px;color:var(--color-neutral-500);padding:var(--space-6);background:var(--color-surface);border-radius:var(--radius-md)" },
       S.sec === "text" ? "本级尚无定稿正文。" : "本级暂无内容。") : null);
@@ -1074,15 +1083,17 @@ function previewPanel(readOnly) {
   } else if (S.fileData.kind === "binary") {
     body = h("div", { style: "padding:var(--space-8);color:var(--color-neutral-500)" }, "该文件类型不支持预览。");
   } else if (S.fileData.kind === "prose") {
+    // 不设 max-height / overflow：正文顺着页面往下长，整页只有 window 一个滚动条。
+    // 以前这里自带 620px 内滚，跟页面滚动叠成两层，滚到哪儿全看指针落在哪个框里。
     body = h("div", {
       style: "padding:var(--space-8) var(--space-8);font-size:15.5px;line-height:1.95;color:var(--color-neutral-200);"
-        + "white-space:pre-wrap;max-width:40em;max-height:620px;overflow:auto",
+        + "white-space:pre-wrap;max-width:40em",
     }, S.fileData.text);
   } else {
     body = h("div", {
       class: "mono",
       style: "padding:var(--space-6) var(--space-8);font-size:13px;line-height:1.75;color:var(--color-neutral-200);"
-        + "white-space:pre-wrap;max-height:620px;overflow:auto",
+        + "white-space:pre-wrap",
     }, S.fileData.text);
   }
 
@@ -1119,7 +1130,7 @@ function jobLogBox() {
     S.job.log ? h("div", {
       class: "mono",
       style: "font-size:11.5px;line-height:1.6;color:var(--color-neutral-200);white-space:pre-wrap;background:var(--color-neutral-900);"
-        + "border-radius:var(--radius-md);padding:var(--space-3);max-height:220px;overflow:auto",
+        + "border-radius:var(--radius-md);padding:var(--space-3);max-height:220px;overflow:auto;overscroll-behavior:contain",
     }, S.job.log) : null);
 }
 
@@ -1159,7 +1170,7 @@ function cmdPanel() {
       }, icon("ph-play", 15), "生成并存档")),
       jobLogBox(),
       (S.file && S.fileData && S.fileData.text != null) ? h("div", { style: "display:flex;flex-direction:column;gap:var(--space-3)" },
-        h("div", { class: "mono", style: "font-size:12px;line-height:1.7;color:var(--color-neutral-200);white-space:pre-wrap;background:var(--color-neutral-900);border-radius:var(--radius-md);padding:var(--space-4);max-height:260px;overflow:auto" },
+        h("div", { class: "mono", style: "font-size:12px;line-height:1.7;color:var(--color-neutral-200);white-space:pre-wrap;background:var(--color-neutral-900);border-radius:var(--radius-md);padding:var(--space-4);max-height:260px;overflow:auto;overscroll-behavior:contain" },
           S.fileData.text),
         h("button", {
           class: "btn btn-primary", style: "font-size:13px",
@@ -1269,19 +1280,31 @@ function render() {
   if (pane === "preview" && !S.file) pane = "list";
   if (pane === "cmd" && S.sec !== "work") pane = "list";
 
+  // 页头 = 地址栏 + 标题块。桌面端把它整块钉在窗口顶端：正文跟页面一起滚（单层滚动），
+  // 读到多深路径与「上一章/下一章」都还在。手机端不钉——那里有自己的 sticky topbar。
+  const head = h("div", {
+    class: "page-head",
+    // 间距沿用原来的 main gap：手机 11.2 / 桌面 16.8，包一层不能把节奏改掉
+    style: "display:flex;flex-direction:column;gap:" + (mobile ? "var(--space-4)" : "var(--space-6)")
+      + (mobile ? ""
+        : ";position:sticky;top:0;z-index:15;background:var(--color-bg);padding-bottom:var(--space-2);"
+          + "box-shadow:0 16px 20px -18px rgba(0,0,0,.95)"),
+  }, addressBar(mobile), titleBlock());
+
   const mainChildren = [
-    addressBar(mobile), titleBlock(),
+    head,
     mobile ? h("div", { class: "seg", style: "display:flex;width:100%" },
       panes.map((p) => h("label", { class: "seg-opt", style: "flex:1;justify-content:center;min-height:44px;font-size:13.5px" },
         h("input", { type: "radio", name: "pane", checked: pane === p.id || null, onChange: () => setState({ pane: p.id }) }),
         icon(p.icon, 15), p.label))) : null,
     (mobile && S.flash && pane !== "cmd") ? flashBar() : null,
     h("div", { style: "display:flex;flex-wrap:wrap;gap:var(--space-6);align-items:flex-start" },
-      (!mobile || pane === "list") ? fileList() : null,
+      (!mobile || pane === "list") ? fileList(!mobile) : null,
       (S.file && (!mobile || pane === "preview")) ? previewPanel(readOnly) : null,
       (!readOnly && S.sec === "work" && (!mobile || pane === "cmd")) ? cmdPanel() : null),
   ];
-  if (!mobile && S.flash) mainChildren.splice(2, 0, flashBar());
+  // 桌面端 flashBar 插在 head（0 号）之后
+  if (!mobile && S.flash) mainChildren.splice(1, 0, flashBar());
 
   const main = h("main", {
     style: mobile
@@ -1296,6 +1319,12 @@ function render() {
   if (mobile) { wrap.appendChild(topbarMobile()); wrap.appendChild(main); wrap.appendChild(sidebar(true)); }
   else { wrap.appendChild(sidebar(false)); wrap.appendChild(main); }
   root.appendChild(wrap);
+  // 实测页头高度，供钉住的文件列表对齐（top: var(--head-h)）。标题换行、窗口缩放都会
+  // 改变页头高度，而 render() 在 resize 与任务轮询时都会跑，天然跟着更新。
+  if (!mobile && head) {
+    const hh = head.getBoundingClientRect().height;
+    if (hh > 0) main.style.setProperty("--head-h", Math.ceil(hh) + "px");
+  }
   applyNavHidden(); // 重建出来的导航按 UI.navHidden 补上标记（render 每 800ms 轮询一次）
 }
 
