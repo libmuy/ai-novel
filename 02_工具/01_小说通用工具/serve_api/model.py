@@ -216,12 +216,20 @@ def _containers(novel_dir: Path) -> tuple[dict[int, DirMeta], dict[tuple, DirMet
 
     for meta in parts.values():
         if meta.plan_dir:
-            meta.title = _dir_first_heading(meta.plan_dir)
+            meta.title = _display_name(_dir_first_heading(meta.plan_dir))
     for meta in vols.values():
         if meta.plan_dir:
-            meta.title = _dir_first_heading(meta.plan_dir, exclude=_OUTLINE_MD_RE)
+            meta.title = _display_name(_dir_first_heading(meta.plan_dir, exclude=_OUTLINE_MD_RE))
 
     return parts, vols
+
+
+def _display_name(heading: str) -> str:
+    """部/卷规划标题惯例是「<文档类型> · 第N部/卷 · <真正的名字>」（如「卷大纲 · 第一卷 ·
+    枯港遗玉」）——类型词和序号，调用方（部/卷列表行）已经单独拼了一遍，原样带过来只是把
+    规划文档的自描述标题重复展示一次，读着像在看规划。只留最后一段真正的名字。"""
+    segs = [s.strip() for s in heading.split(" · ") if s.strip()]
+    return segs[-1] if segs else heading
 
 
 def _first_heading(path: Path | None) -> str:
