@@ -9,6 +9,7 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 
+import progress_store
 from prompt_build import layout as L  # noqa: E402
 
 from . import feed as feed_mod
@@ -310,16 +311,27 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if path == "/api/backfill":
                 return self._post_backfill(body)
+            if path == "/api/withdraw":
+                return self._post_withdraw(body)
             if path == "/api/jobs":
                 code, data = jobs._create_job(self.novel_dir, body)
                 return self._json(data, code)
             self._err(404, "not found")
-        except (ValueError, L.LayoutError) as e:
+        except payload.WithdrawConflict as e:
+            self._err(409, str(e))
+        except (ValueError, L.LayoutError, progress_store.ProgressFormatError) as e:
             self._err(400, str(e))
         except FileNotFoundError:
             self._err(404, "not found")
         except Exception as e:  # noqa: BLE001
             self._err(500, str(e))
+
+    def _post_withdraw(self, body):
+        part, vol, ch = body.get("part"), body.get("vol"), body.get("ch")
+        if part is None or vol is None or ch is None:
+            return self._err(400, "缺少 part/vol/ch")
+        result = payload._do_withdraw(self.novel_dir, part, vol, ch, body.get("kind", ""))
+        self._json(result)
 
     def _post_backfill(self, body):
         part, vol, ch = body.get("part"), body.get("vol"), body.get("ch")

@@ -53,6 +53,7 @@ from serve_api import feed, http, jobs, model  # noqa: E402
 
 # ---- 兼容旧调用面：test_serve_audio.py 等按 `serve_audio.X` 引用这几个名字 ----
 scan = model.scan
+latest_key = model.latest_key
 _scan_tree = model._scan_tree
 _parse_ref = model._parse_ref
 _mp3_duration_seconds = model._mp3_duration_seconds

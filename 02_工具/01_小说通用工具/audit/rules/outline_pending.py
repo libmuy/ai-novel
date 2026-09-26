@@ -21,6 +21,7 @@ from ..engine import AuditRule
 from ..context import AuditContext
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+import progress_store  # noqa: E402
 
 _SECTION_HEADINGS = ("【待确认清单】", "待确认清单", "【待裁决】", "【遗留待裁决】", "遗留待裁决")
 _TRIGGER_RE = re.compile(r"(遗留|待|需|请)[^。\n]{0,8}(作者|用户|过目|裁决|确认|复核|拍板|定夺)")
@@ -79,8 +80,8 @@ class OutlinePendingRule(AuditRule):
 
     def run(self, context: AuditContext) -> List[Finding]:
         novel_dir = context.novel_dir
-        if not (novel_dir / "00_进度.md").exists():
-            return []
+        if not progress_store.exists(novel_dir):
+            return []  # 缺失（或只有遗留 00_进度.md）由 progress 规则的 PROGRESS008 报，这里不重复
         try:
             import progress_report
         except ImportError:
@@ -90,9 +91,9 @@ class OutlinePendingRule(AuditRule):
         except Exception as e:  # noqa: BLE001
             return [Finding(
                 severity=Severity.WARNING, rule=self.name, code="PLAN000",
-                message=f"待确认清单门禁未能执行：{e}", file="00_进度.md",
+                message=f"待确认清单门禁未能执行：{e}", file=progress_store.PROGRESS_REL,
                 suggestion="手工跑 `progress_report.py <小说目录>` 看详细报错",
-                category="规划", locations=["00_进度.md"])]
+                category="规划", locations=[progress_store.PROGRESS_REL])]
 
         block, warn, info = [], [], []
         for c in rep.chapters:

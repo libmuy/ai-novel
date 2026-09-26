@@ -12,7 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "01_小说通用工具"))
 
-from helpers import make_novel  # noqa: E402
+from helpers import make_novel, write_progress  # noqa: E402
 from audit import AuditContext  # noqa: E402
 from audit.rules.outline_pending import OutlinePendingRule, _open_items  # noqa: E402
 
@@ -42,6 +42,9 @@ R3 冷读的实质问题已处理。
 
 
 def _novel(td, outline_body, manuscript_status):
+    """`manuscript_status`：`定稿`/`待校验`/`草稿` 之一就照实登记；不是这三态
+    （比如旧测试用的占位值「待回填」）就当作「进度表没登记这个产出」——
+    00_进度.json 的 schema 不允许自造状态词。"""
     novel = Path(make_novel(td))
     (novel / "03_规划" / "01_第01部" / "01_卷01").mkdir(parents=True, exist_ok=True)
     (novel / "03_规划" / "01_第01部" / "01_卷01" / "规划_卷01_章0001.md").write_text(
@@ -49,11 +52,10 @@ def _novel(td, outline_body, manuscript_status):
     (novel / "10_正文" / "01_第01部" / "01_卷01").mkdir(parents=True, exist_ok=True)
     (novel / "10_正文" / "01_第01部" / "01_卷01" / "正文_卷01_章0001.md").write_text(
         "正文正文正文。", encoding="utf-8")
-    (novel / "00_进度.md").write_text(
-        "# 进度\n\n| 产出 | 状态 | 说明 |\n|---|---|---|\n"
-        f"| 细纲 | `规划_卷01_章0001.md` | 定稿 |\n"
-        f"| 正文 | `正文_卷01_章0001.md` | {manuscript_status} |\n",
-        encoding="utf-8")
+    mapping = {"03_规划/01_第01部/01_卷01/规划_卷01_章0001.md": "定稿"}
+    if manuscript_status in ("定稿", "待校验", "草稿"):
+        mapping["10_正文/01_第01部/01_卷01/正文_卷01_章0001.md"] = manuscript_status
+    write_progress(novel, mapping)
     return novel
 
 

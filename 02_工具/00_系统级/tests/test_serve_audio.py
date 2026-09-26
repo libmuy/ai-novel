@@ -18,6 +18,7 @@ from xml.etree import ElementTree as ET
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "01_小说通用工具"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+import progress_store  # noqa: E402
 import serve_audio as S  # noqa: E402
 
 # 假 CBR mp3：MPEG2 Layer3 48kbps（b2 高 4 位=6）+ 填充 ≈ 13s
@@ -25,7 +26,7 @@ _MP3 = b"\xff\xf3\x60\xc4" + b"\x00" * 80000
 _MANUSCRIPT = "第一段。\n\n第二段。\n\n※\n\n第二场。\n"
 
 
-def _make_tree(tmp: Path, with_audio=True, with_ch2=True):
+def _make_tree(tmp: Path, with_audio=True, with_ch2=True, with_ch2_manuscript=False, with_progress=False):
     novel = tmp / "00_苍玄"
     (novel / "10_正文" / "01_第01部" / "01_卷01").mkdir(parents=True)
     (novel / "10_正文" / "01_第01部" / "01_卷01" / "正文_卷01_章0001.md").write_text(_MANUSCRIPT, encoding="utf-8")
@@ -55,6 +56,20 @@ def _make_tree(tmp: Path, with_audio=True, with_ch2=True):
     (v1 / "规划_卷01_章0001.md").write_text("## 第一章细纲\n细纲内容", encoding="utf-8")
     (v1 / "01_事件").mkdir()
     (v1 / "01_事件" / "BT-V1-001_战斗结算.md").write_text("战斗结算", encoding="utf-8")
+
+    if with_ch2 and with_ch2_manuscript:
+        (novel / "10_正文" / "01_第01部" / "01_卷01" / "正文_卷01_章0002.md").write_text(
+            _MANUSCRIPT, encoding="utf-8")
+        (v1 / "规划_卷01_章0002.md").write_text("## 第二章细纲\n细纲内容", encoding="utf-8")
+
+    if with_progress:
+        prog = {"version": 1, "files": {
+            "10_正文/01_第01部/01_卷01/正文_卷01_章0001.md": {"status": "定稿"},
+        }}
+        if with_ch2 and with_ch2_manuscript:
+            prog["files"]["10_正文/01_第01部/01_卷01/正文_卷01_章0002.md"] = {"status": "定稿"}
+        (novel / "00_进度.json").write_text(json.dumps(prog, ensure_ascii=False), encoding="utf-8")
+
     return novel
 
 
@@ -84,6 +99,15 @@ class TestScan(unittest.TestCase):
             self.assertEqual(entries[1].manuscript, None)   # ch2 只有工作区
             self.assertIsNone(entries[1].outline)
             self.assertFalse(entries[1].has_audio)
+
+    def test_latest_key(self):
+        with tempfile.TemporaryDirectory() as td:
+            entries = S.scan(_make_tree(Path(td), with_ch2_manuscript=True))
+            self.assertEqual(S.latest_key(entries, "manuscript"), (1, 1, 2))
+            self.assertEqual(S.latest_key(entries, "outline"), (1, 1, 2))
+
+    def test_latest_key_empty(self):
+        self.assertIsNone(S.latest_key([], "manuscript"))
 
 
 class TestScanTree(unittest.TestCase):
@@ -204,7 +228,11 @@ class TestApiLevel(_HttpTestBase):
         self.assertIn("00_提示词", names)
         self.assertIn("02_状态", names)
         self.assertIn("03_音频", names)
-        self.assertEqual(body["chapter"], {"n": 1, "prev": None, "next": 2})
+        chapter = body["chapter"]
+        self.assertEqual((chapter["n"], chapter["prev"], chapter["next"]), (1, None, 2))
+        # ch1 是本书目前唯一有正文的章，正文/细纲各自都是「全书最新」
+        self.assertTrue(chapter["withdraw"]["manuscript"]["latest"])
+        self.assertTrue(chapter["withdraw"]["outline"]["latest"])
 
     def test_plan_vol_excludes_chapter_outline(self):
         st, body = self._req("GET", "/api/level?sec=plan&part=1&vol=1")
@@ -438,6 +466,110 @@ class TestHttpMisc(_HttpTestBase):
             self.assertEqual(len(r.read()), 50)
         st, body, headers = self._get_raw("/feed.xml")
         self.assertIn("rss+xml", headers["Content-Type"])
+
+
+def _make_withdraw_tree(tmp: Path) -> Path:
+    """ch1（无音频）+ ch2（有音频，全书最新）各自正文+细纲齐全，附 00_进度.json 声明两章
+    「定稿」——专供 TestWithdraw 用，不复用 `_make_tree`：那份共享 fixture 的默认形状
+    （ch2 只建工作区、没有正文）被好几个别的测试断言死了，硬塞更多参数进去只会更难读。"""
+    novel = tmp / "00_苍玄"
+    text_dir = novel / "10_正文" / "01_第01部" / "01_卷01"
+    text_dir.mkdir(parents=True)
+    plan_dir = novel / "03_规划" / "01_第01部" / "01_卷01"
+    plan_dir.mkdir(parents=True)
+    prog_files = {}
+    for ch in (1, 2):
+        (text_dir / f"正文_卷01_章{ch:04d}.md").write_text(_MANUSCRIPT, encoding="utf-8")
+        (plan_dir / f"规划_卷01_章{ch:04d}.md").write_text(f"## 第{ch}章细纲\n细纲内容", encoding="utf-8")
+        prog_files[f"10_正文/01_第01部/01_卷01/正文_卷01_章{ch:04d}.md"] = {"status": "定稿"}
+        prog_files[f"03_规划/01_第01部/01_卷01/规划_卷01_章{ch:04d}.md"] = {"status": "定稿"}
+        ws = novel / "05_工作区" / "03_第01部" / "03_卷01" / f"{ch:04d}"
+        (ws / "00_提示词").mkdir(parents=True)
+        (ws / "00_提示词" / "01_正文生成.md").write_text("# 提示词\n内容", encoding="utf-8")
+        (ws / "02_状态").mkdir()
+        (ws / "02_状态" / "01_状态履历.md").write_text("| a | b |", encoding="utf-8")
+        (ws / "02_状态" / "03_细纲落地核对.md").write_text("- [x] 已落地", encoding="utf-8")
+        if ch == 2:  # 音频挂在「最新」这章，撤下时才能真正验到归档逻辑
+            aud = ws / "03_音频"
+            aud.mkdir()
+            (aud / f"章{ch:04d}.mp3").write_bytes(_MP3)
+            (aud / f"章{ch:04d}.json").write_text('{"voice":"x"}', encoding="utf-8")
+    (novel / "00_进度.json").write_text(
+        json.dumps({"version": 1, "files": prog_files}, ensure_ascii=False), encoding="utf-8")
+    return novel
+
+
+class TestWithdraw(_HttpTestBase):
+    def setUp(self):
+        self.td = tempfile.TemporaryDirectory()
+        self.novel = _make_withdraw_tree(Path(self.td.name))
+        self.httpd = S.ThreadingHTTPServer(
+            ("127.0.0.1", 0),
+            S.make_handler(self.novel, "苍玄", None, self.read_only))
+        self.port = self.httpd.server_address[1]
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+
+    def test_non_latest_chapter_rejected(self):
+        st, body = self._req("POST", "/api/withdraw", {"part": 1, "vol": 1, "ch": 1, "kind": "manuscript"})
+        self.assertEqual(st, 409)
+        self.assertIn("06_章节回溯修改.md", body["error"])
+        self.assertTrue((self.novel / "10_正文/01_第01部/01_卷01/正文_卷01_章0001.md").exists())
+
+    def test_outline_blocked_while_manuscript_exists(self):
+        st, body = self._req("POST", "/api/withdraw", {"part": 1, "vol": 1, "ch": 2, "kind": "outline"})
+        self.assertEqual(st, 409)
+        self.assertIn("先撤正文", body["error"])
+
+    def test_missing_csrf_header_rejected(self):
+        st, body = self._req("POST", "/api/withdraw", {"part": 1, "vol": 1, "ch": 2, "kind": "manuscript"}, csrf=False)
+        self.assertEqual(st, 403)
+
+    def test_bad_progress_json_aborts_without_moving_file(self):
+        (self.novel / "00_进度.json").write_text("{not json", encoding="utf-8")
+        st, body = self._req("POST", "/api/withdraw", {"part": 1, "vol": 1, "ch": 2, "kind": "manuscript"})
+        self.assertEqual(st, 400)
+        self.assertTrue((self.novel / "10_正文/01_第01部/01_卷01/正文_卷01_章0002.md").exists())
+
+    def test_withdraw_latest_manuscript_archives_and_clears_progress(self):
+        canon = self.novel / "10_正文/01_第01部/01_卷01/正文_卷01_章0002.md"
+        original = canon.read_text(encoding="utf-8")
+        st, body = self._req("POST", "/api/withdraw", {"part": 1, "vol": 1, "ch": 2, "kind": "manuscript"})
+        self.assertEqual(st, 200)
+        self.assertTrue(body["progress_cleared"])
+        self.assertFalse(canon.exists())
+        archived = self.novel / body["archived_to"]
+        self.assertTrue(archived.is_file())
+        self.assertEqual(archived.read_text(encoding="utf-8"), original)
+        self.assertTrue(archived.name.startswith("01_正文生成_旧稿_"))
+
+        # 进度表登记已清，PROGRESS001 不会因为「声明了但文件不在」报错
+        statuses = progress_store.statuses(self.novel)
+        self.assertNotIn("10_正文/01_第01部/01_卷01/正文_卷01_章0002.md", statuses)
+
+        # 音频一并归档，标签与 ch1 一样变回没有正文
+        ws2_audio = self.novel / "05_工作区/03_第01部/03_卷01/0002/03_音频"
+        self.assertEqual(list(ws2_audio.glob("章0002.mp3")), [])
+        self.assertEqual(len(body["audio_archived"]), 2)  # .mp3 + .json
+
+        st, body = self._req("GET", "/api/level?sec=text&part=1&vol=1")
+        codes = {c["code"] for c in body["children"]}
+        self.assertEqual(codes, {"0001"})  # ch2 从「有正文」列表里消失
+
+        _st, raw, _headers = self._get_raw("/feed.xml")
+        self.assertNotIn(b"/audio/1/1/2", raw)  # 撤下的这章音频不再出现在播客里
+
+    def test_withdraw_now_latest_shifts_to_earlier_chapter(self):
+        self._req("POST", "/api/withdraw", {"part": 1, "vol": 1, "ch": 2, "kind": "manuscript"})
+        st, body = self._req("GET", "/api/level?sec=work&part=1&vol=1&ch=1")
+        self.assertTrue(body["chapter"]["withdraw"]["manuscript"]["latest"])
+
+
+class TestWithdrawReadOnly(_HttpTestBase):
+    read_only = True
+
+    def test_withdraw_rejected(self):
+        st, body = self._req("POST", "/api/withdraw", {"part": 1, "vol": 1, "ch": 1, "kind": "manuscript"})
+        self.assertEqual(st, 403)
 
 
 if __name__ == "__main__":

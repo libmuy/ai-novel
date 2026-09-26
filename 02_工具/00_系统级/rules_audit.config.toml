@@ -34,6 +34,7 @@ conditional = [
 historical = [
   "03_本章初始状态.md",
   "03_本章开篇状态.md",
+  "00_进度.md",  # 已退休，结构化成熟度迁到 00_进度.json（叙事说明砍掉，历史见 git log）
 ]
 
 [index]

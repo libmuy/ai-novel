@@ -111,8 +111,7 @@ class TestProgress007Integration(unittest.TestCase):
     def _findings(self, record):
         novel_dir = build_novel_fixture(
             self.tmp,
-            progress_table="| 文件 | 状态 |\n|---|---|\n"
-                           "| `10_正文/01_第01部/01_卷01/正文_卷01_章0001.md` | 定稿 |\n",
+            progress={"10_正文/01_第01部/01_卷01/正文_卷01_章0001.md": "定稿"},
             cold_read_record=record, has_changelog=True, merged_upto="03_第01部/03_卷01/0001")
         declared = progress_report.declared_status(novel_dir)
         rep = progress_report.collect(novel_dir)

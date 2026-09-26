@@ -3,17 +3,15 @@
 """
 进度派生视图与对账 (progress_report.py)
 
-`00_进度.md` 长期是全仓 churn 最高的文件，且它自己写过「此前本文件长期滞后于
-实际进度」。病因是它把两类信息混在一起：
-
+进度分两半：
 - **可推导的**：文件在不在、多少字、冷读跑了几轮、云端返修几轮、履历折叠到哪一章
   ——这些脚本一秒算得出，人手抄只会越抄越旧。
-- **不可推导的**：成熟度（草稿 / 待校验 / 定稿）与用户裁决——「通过全部校验」是
-  人的判断，没有任何脚本能替它拍板。
+- **不可推导的**：成熟度（草稿 / 待校验 / 定稿）——「通过全部校验」是人的判断，
+  没有任何脚本能替它拍板，登记在 `00_进度.json`（见 `progress_store.py`）。
 
 本脚本把前一半物化成**派生视图**（`00_系统架构规范.md` §二·A 第 2 条允许的形态：
-脚本生成、文件头注明派生、非权威），并对后一半做**对账**——进度表声明的成熟度
-与可观测事实矛盾时逐条报出来。`00_进度.md` 从此只需维护成熟度与裁决说明。
+脚本生成、文件头注明派生、非权威），并对后一半做**对账**——`00_进度.json` 声明的
+成熟度与可观测事实矛盾时逐条报出来。
 
 用法
 ----
@@ -39,20 +37,20 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+import progress_store
 import record_seal
 
 DERIVED_REL = "05_工作区/02_状态/05_进度派生视图.md"
-PROGRESS_REL = "00_进度.md"
+PROGRESS_REL = progress_store.PROGRESS_REL
 SYNC_REL = "05_工作区/02_状态/01_最新状态/00_同步状态.md"
 
-# 正文字数口径：汉字数（不含标题行）。与 00_进度.md 历来的记法一致。
+# 正文字数口径：汉字数（不含标题行）。与进度表历来的记法一致。
 _HAN_RE = re.compile(r"[一-鿿]")
-_CODE_PATH_RE = re.compile(r"`([^`\n]+?\.md)`")
-_STATUS_RE = re.compile(r"(定稿|待校验|草稿)")
-# 进度表里的占位/通配路径，不参与「文件必须存在」的对账
+# 进度表里的占位/通配路径，不参与「文件必须存在」的对账（progress_store 的 schema
+# 已经在写入时就拒绝这类 key，这里留着是防旧数据/直接改坏 json 的兜底）
 _PLACEHOLDER = ("0N", "NN", "XX", "《", "*", "N.md")
 # canonical 产出根：只有这些前缀的路径才是「正式小说数据」，对账只管它们
-CANONICAL_PREFIXES = ("01_设定/", "02_数据库/", "03_规划/", "10_正文/")
+CANONICAL_PREFIXES = progress_store.CANONICAL_PREFIXES
 
 
 def han_count(text: str) -> int:
@@ -148,39 +146,15 @@ class Report:
 # ────────────────────────────────────────────────────── 进度表解析
 
 def declared_status(novel_dir: Path) -> dict[str, str]:
-    """`00_进度.md` 表格行 → {路径: 成熟度}。与 prompt_build.progress 同口径。"""
-    src = novel_dir / PROGRESS_REL
-    out: dict[str, str] = {}
-    if not src.exists():
-        return out
-    for line in src.read_text(encoding="utf-8", errors="ignore").splitlines():
-        s = line.strip()
-        if not s.startswith("|"):
-            continue
-        cells = [c.strip() for c in s.strip("|").split("|")]
-        if len(cells) < 2 or all(set(c) <= set(":- ") for c in cells):
-            continue
-        paths = [p for c in cells for p in _CODE_PATH_RE.findall(c)]
-        status = next((m.group(1) for c in cells
-                       for m in [_STATUS_RE.search(c)] if m), None)
-        if not paths or status is None:
-            continue
-        for p in paths:
-            out.setdefault(p.strip(), status)
-    return out
+    """`00_进度.json` → {路径: 成熟度}。`ProgressFormatError` 原样抛出——
+    调用方（CLI/`reconcile` 的上游 `collect`）没有兜底解析失败的必要，
+    门禁层（`audit/rules/progress.py` 的 PROGRESS008）另外处理。"""
+    return progress_store.statuses(novel_dir)
 
 
 def lookup(declared: dict[str, str], path: Path, novel_dir: Path) -> str | None:
-    """按后缀匹配查成熟度（进度表里既有全路径也有裸文件名）。"""
-    try:
-        want = path.relative_to(novel_dir).as_posix()
-    except ValueError:
-        want = path.as_posix()
-    for recorded, st in declared.items():
-        r = recorded.lstrip("./")
-        if want == r or want.endswith("/" + r):
-            return st
-    return None
+    """精确匹配查成熟度（`00_进度.json` 的 key 已经是唯一的 canonical 相对路径）。"""
+    return progress_store.status_of(declared, path, novel_dir)
 
 
 # ────────────────────────────────────────────────────── 采集
@@ -322,21 +296,21 @@ def reconcile(novel_dir: Path, declared: dict[str, str], rep: Report) -> list[tu
             continue                      # 0N_卷0N 这类通配写法
         if not (novel_dir / p).exists():
             out.append(("error", "PROGRESS001",
-                        f"`00_进度.md` 声明「{status}」的产出不存在：`{p}`"))
+                        f"`00_进度.json` 声明「{status}」的产出不存在：`{p}`"))
 
     # PROGRESS002：章节产物已落位，进度表却完全没登记
     for c in rep.chapters:
         if c.outline is not None and c.declared_outline is None:
             out.append(("warning", "PROGRESS002",
-                        f"{c.cid} 细纲已落位但 `00_进度.md` 未登记："
+                        f"{c.cid} 细纲已落位但 `00_进度.json` 未登记："
                         f"`{c.outline.relative_to(novel_dir).as_posix()}`"))
         if c.manuscript is not None and c.declared_manuscript is None:
             out.append(("warning", "PROGRESS002",
-                        f"{c.cid} 正文已落位但 `00_进度.md` 未登记："
+                        f"{c.cid} 正文已落位但 `00_进度.json` 未登记："
                         f"`{c.manuscript.relative_to(novel_dir).as_posix()}`"))
 
     # PROGRESS003：声明「定稿」但流水线上还缺件（成熟度显然超前于事实）
-    #   「定稿」＝「校验通过，可被引用」（见 `00_进度.md` 图例）——缺件即伪造下游前置，判 error。
+    #   「定稿」＝「校验通过，可被引用」（见 `progress_store.MATURITY`）——缺件即伪造下游前置，判 error。
     #   「待校验」＝结构齐但校验未做完，是正当中间态——只对「连正文都没落位」这类硬矛盾报 warning。
     for c in rep.chapters:
         # 细纲：定稿前必须跑过冷读循环并留记录（细纲缺陷会原样复制进之后每一版正文）
@@ -482,9 +456,9 @@ def render_derived(rep: Report) -> str:
         f"> 由 `02_工具/01_小说通用工具/progress_report.py --write` 生成于 {now}。",
         ">",
         "> 本文件只记录**可观测事实**（文件在不在、多少字、跑了几轮、折叠到哪）。",
-        "> **成熟度（草稿 / 待校验 / 定稿）是人的判断，权威在 `00_进度.md`**——",
+        "> **成熟度（草稿 / 待校验 / 定稿）是人的判断，权威在 `00_进度.json`**——",
         "> 「通过全部校验」没有任何脚本能替你拍板。两边不一致时见下方【对账】，",
-        "> 并以 `00_进度.md` 为准去修事实，或修 `00_进度.md` 的声明。",
+        "> 并以 `00_进度.json` 为准去修事实，或修 `00_进度.json` 的声明。",
         "",
         "---",
         "",
@@ -556,7 +530,7 @@ def render_text(rep: Report) -> str:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="生成进度派生视图并与 00_进度.md 对账")
+    ap = argparse.ArgumentParser(description="生成进度派生视图并与 00_进度.json 对账")
     ap.add_argument("novel_dir")
     ap.add_argument("--write", action="store_true",
                     help=f"写出派生视图到 {DERIVED_REL}")
@@ -586,7 +560,11 @@ def main() -> int:
         print(text)
         return 0 if ok else 1
 
-    rep = collect(novel_dir)
+    try:
+        rep = collect(novel_dir)
+    except progress_store.ProgressFormatError as e:
+        print(f"{PROGRESS_REL} 格式非法：{e}", file=sys.stderr)
+        return 1
 
     if args.format == "json":
         print(json.dumps({

@@ -16,6 +16,9 @@ from pathlib import Path
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "01_小说通用工具"))
 from prompt_build import assemble, extract, layout as L, leak, progress
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from helpers import write_progress  # noqa: E402
+
 
 def _write(path: Path, text: str):
     """辅助方法：创建并写入文件。"""
@@ -421,36 +424,49 @@ class TestProgressIndex(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_progress_index_status_of(self):
-        """ProgressIndex.status_of 按后缀匹配查成熟度。"""
-        _write(self.tmp / "00_进度.md", """
-| 文件 | 状态 |
-|---|---|
-| `03_规划/01_第01部/01_卷01/规划_卷01_章0001.md` | 定稿 |
-| `10_正文/01_第01部/01_卷01/正文_卷01_章0001.md` | 待校验 |
-""")
+        """ProgressIndex.status_of 精确匹配查成熟度。"""
+        write_progress(self.tmp, {
+            "03_规划/01_第01部/01_卷01/规划_卷01_章0001.md": "定稿",
+            "10_正文/01_第01部/01_卷01/正文_卷01_章0001.md": "待校验",
+        })
         idx = progress.ProgressIndex(self.tmp)
         self.assertEqual(idx.status_of(self.tmp / "03_规划/01_第01部/01_卷01/规划_卷01_章0001.md"), "定稿")
         self.assertEqual(idx.status_of(self.tmp / "10_正文/01_第01部/01_卷01/正文_卷01_章0001.md"), "待校验")
 
     def test_progress_index_is_at_least(self):
         """is_at_least(path, "定稿") 对定稿返回 True，对待校验/草稿/未记录返回 False。"""
-        _write(self.tmp / "00_进度.md", """
-| 文件 | 状态 |
-|---|---|
-| `规划_卷01_章0001.md` | 定稿 |
-| `规划_卷01_章0002.md` | 待校验 |
-| `规划_卷01_章0003.md` | 草稿 |
-""")
+        write_progress(self.tmp, {
+            "03_规划/01_第01部/01_卷01/规划_卷01_章0001.md": "定稿",
+            "03_规划/01_第01部/01_卷01/规划_卷01_章0002.md": "待校验",
+            "03_规划/01_第01部/01_卷01/规划_卷01_章0003.md": "草稿",
+        })
         idx = progress.ProgressIndex(self.tmp)
-        self.assertTrue(idx.is_at_least(self.tmp / "规划_卷01_章0001.md", "定稿"))
-        self.assertFalse(idx.is_at_least(self.tmp / "规划_卷01_章0002.md", "定稿"))
-        self.assertFalse(idx.is_at_least(self.tmp / "规划_卷01_章0003.md", "定稿"))
-        self.assertFalse(idx.is_at_least(self.tmp / "不存在的文件.md", "定稿"))
+        self.assertTrue(idx.is_at_least(self.tmp / "03_规划/01_第01部/01_卷01/规划_卷01_章0001.md", "定稿"))
+        self.assertFalse(idx.is_at_least(self.tmp / "03_规划/01_第01部/01_卷01/规划_卷01_章0002.md", "定稿"))
+        self.assertFalse(idx.is_at_least(self.tmp / "03_规划/01_第01部/01_卷01/规划_卷01_章0003.md", "定稿"))
+        self.assertFalse(idx.is_at_least(self.tmp / "10_正文/不存在的文件.md", "定稿"))
 
     def test_progress_index_not_exists(self):
-        """00_进度.md 不存在时，ProgressIndex.exists 为 False。"""
+        """00_进度.json 不存在时，ProgressIndex.exists 为 False，legacy/error 也为假。"""
         idx = progress.ProgressIndex(self.tmp)
         self.assertFalse(idx.exists)
+        self.assertFalse(idx.legacy)
+        self.assertIsNone(idx.error)
+
+    def test_progress_index_legacy_md_detected(self):
+        """只有遗留 00_进度.md、没有 00_进度.json：exists=False，legacy=True。"""
+        _write(self.tmp / "00_进度.md", "# 旧进度表（已退休）\n")
+        idx = progress.ProgressIndex(self.tmp)
+        self.assertFalse(idx.exists)
+        self.assertTrue(idx.legacy)
+        self.assertIsNone(idx.error)
+
+    def test_progress_index_invalid_json_sets_error(self):
+        """00_进度.json 存在但不是合法 JSON：error 非空，exists 为 False。"""
+        _write(self.tmp / "00_进度.json", "不是 JSON")
+        idx = progress.ProgressIndex(self.tmp)
+        self.assertFalse(idx.exists)
+        self.assertIsNotNone(idx.error)
 
 
 class TestLeak(unittest.TestCase):
@@ -534,6 +550,20 @@ class TestLayout(unittest.TestCase):
         output_file = layout.output_dir / "00_单章细纲.md"
         self.assertTrue(output_file.exists())
 
+    def test_layout_prebuild_include_target_false_skips_canonical(self):
+        """`include_target=False`：回填空文件照建，canonical 目标不建——审查台「撤下重新
+        生成」之后跑「生成并存档」时，不能让预建把刚撤下的 canonical 位置又填回占位符。"""
+        layout = L.resolve(self.tmp, part=1, volume=1, chapter=1)
+        target = layout.manuscript
+
+        created = L.prebuild(layout, "01_正文生成.md", target, include_target=False)
+
+        self.assertFalse(target.exists())
+        self.assertNotIn(L.rel(self.tmp, target), created)
+        output_file = layout.output_dir / "01_正文生成.md"
+        self.assertTrue(output_file.exists())
+        self.assertIn(L.rel(self.tmp, output_file), created)
+
 
 class TestAssemble(unittest.TestCase):
     """assemble.build_manuscript 和 build_outline 的端到端测试。"""
@@ -550,13 +580,11 @@ class TestAssemble(unittest.TestCase):
         novel_dir = self.tmp / "00_小说"
         novel_dir.mkdir()
 
-        # 创建 00_进度.md（标记大纲定稿）
-        _write(novel_dir / "00_进度.md", """
-| 文件 | 状态 |
-|---|---|
-| `03_规划/01_第01部/01_卷01/规划_卷01.md` | 定稿 |
-| `03_规划/01_第01部/01_卷01/规划_卷01_章0001.md` | 定稿 |
-""")
+        # 创建 00_进度.json（标记大纲定稿）
+        write_progress(novel_dir, {
+            "03_规划/01_第01部/01_卷01/规划_卷01.md": "定稿",
+            "03_规划/01_第01部/01_卷01/规划_卷01_章0001.md": "定稿",
+        })
 
         # 创建最小设定
         _write(novel_dir / "01_设定/00_主角档案.md", "# 主角\n主角的档案。\n")
@@ -1030,11 +1058,7 @@ class TestBuildPromptCLI(unittest.TestCase):
         novel_dir.mkdir()
 
         # 大纲标记为草稿（不是定稿）
-        _write(novel_dir / "00_进度.md", """
-| 文件 | 状态 |
-|---|---|
-| `03_规划/01_第01部/01_卷01/规划_卷01_章0001.md` | 草稿 |
-""")
+        write_progress(novel_dir, {"03_规划/01_第01部/01_卷01/规划_卷01_章0001.md": "草稿"})
 
         # 最小设定
         _write(novel_dir / "01_设定/00_红线包.md", "# 红线包\n约束。\n")
@@ -1157,9 +1181,7 @@ class TestPreparePhaseCLI(unittest.TestCase):
     def _novel(self):
         nd = self.tmp / "00_小说"
         nd.mkdir()
-        _write(nd / "00_进度.md",
-               "| 文件 | 状态 |\n|---|---|\n"
-               "| `03_规划/01_第01部/01_卷01/规划_卷01.md` | 定稿 |\n")
+        write_progress(nd, {"03_规划/01_第01部/01_卷01/规划_卷01.md": "定稿"})
         _write(nd / "01_设定/00_红线包.md", "# 红线包\n约束。\n")
         _write(nd / "01_设定/00_主角档案.md",
                "# 主角\n| 字段 | 必填 | 内容 |\n|---|---|---|\n| 姓名 | (必) | 苏砚 |\n")
@@ -1202,9 +1224,7 @@ class TestPreparePhaseCLI(unittest.TestCase):
     def test_gate_blocks_when_prev_changelog_missing(self):
         """章2 细纲：上一章正文落位但履历还没写 → GATE 阻断（开篇状态会漏上章变化）。"""
         nd = self._novel()
-        _write(nd / "00_进度.md",
-               "| 文件 | 状态 |\n|---|---|\n"
-               "| `03_规划/01_第01部/01_卷01/规划_卷01.md` | 定稿 |\n")
+        write_progress(nd, {"03_规划/01_第01部/01_卷01/规划_卷01.md": "定稿"})
         _write(nd / "10_正文/01_第01部/01_卷01/正文_卷01_章0001.md", "苏砚醒来。\n" * 50)
         r = subprocess.run(
             [sys.executable, str(self.build_prompt_py), "--novel", str(nd),

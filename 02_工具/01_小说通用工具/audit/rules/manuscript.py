@@ -31,7 +31,7 @@ class ManuscriptRule(AuditRule):
         resolver = ReferenceResolver(context)
 
         # MANUSCRIPT003：正文首行的「章名」标题规范。体例 = 首个非空行是 `# 章名`，
-        # 章名逐字照抄单章细纲【基础信息】「章名」字段；章号只进 `00_进度.md`/目录、不进正文。
+        # 章名逐字照抄单章细纲【基础信息】「章名」字段；章号只进进度表/目录、不进正文。
         # 三条子判定（同码分列，各自聚合一条 Finding）：
         #   a) 编号式标题（`# 第NN章 …`）——无论全书体例，一律报；
         #   b) 首行标题与细纲「章名」字段不一致（细纲存在且填了该字段时才比对）；
@@ -91,7 +91,7 @@ class ManuscriptRule(AuditRule):
                 rule=self.name,
                 code="MANUSCRIPT003",
                 message=f"{len(numeric)} 章正文以编号式标题起头（{numeric[0][1]!r} 等）——"
-                        f"章号进 `00_进度.md`/目录，不进正文",
+                        f"章号只进进度表/目录，不进正文",
                 file=numeric[0][0].relative_path,
                 line=1,
                 suggestion="首行改为 `# 章名`（照抄细纲【基础信息】「章名」字段），或删除标题行",

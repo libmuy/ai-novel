@@ -96,7 +96,7 @@ def _write_temp_review_config(engine: str, body: dict) -> Path:
 def _cmd_outline_ch(novel_dir, part, vol, ch, body):
     lay = L.resolve(novel_dir, part, vol, ch)
     cmd = [sys.executable, str(paths.TOOLS_DIR / "build_prompt.py"), "--chapter-dir", str(lay.chapter_dir),
-           "--task", "细纲"]
+           "--task", "细纲", "--no-prebuild-target"]
     if body.get("force"):
         cmd.append("--force")
     return cmd, []
@@ -105,7 +105,7 @@ def _cmd_outline_ch(novel_dir, part, vol, ch, body):
 def _cmd_draft(novel_dir, part, vol, ch, body):
     lay = L.resolve(novel_dir, part, vol, ch)
     cmd = [sys.executable, str(paths.TOOLS_DIR / "build_prompt.py"), "--chapter-dir", str(lay.chapter_dir),
-           "--task", "正文"]
+           "--task", "正文", "--no-prebuild-target"]
     if body.get("force"):
         cmd.append("--force")
     return cmd, []

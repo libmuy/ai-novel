@@ -113,12 +113,17 @@ def resolve(novel_dir: Path, part: int, volume: int, chapter: int) -> ChapterLay
 
 
 def prebuild(layout: ChapterLayout, archive_name: str, target: Path,
-             dry_run: bool = False) -> list[str]:
+             dry_run: bool = False, include_target: bool = True) -> list[str]:
     """预建三类文件（只创建、不覆盖），返回实际新建的相对路径清单。
 
     ① 提示词存档 `00_提示词/<archive_name>`
     ② 云端产出回填 `01_模型输出/<archive_name>`（与存档同名，WS006 配对）
     ③ 目标数据文件 `target`（正文 `10_正文/…`，细纲 `03_规划/…`）
+
+    `include_target=False` 跳过③：命令行/Agent 走的门禁流程要占位文件在，好让
+    "已预建"的空壳能被后续步骤发现；但审查台的「撤下重新生成」流程会先把 canonical
+    文件挪走再重新生成提示词，这时候自动把占位文件放回 canonical 位置，会让刚撤下的
+    章节标签立刻又跳回"有正文"——撤下就白做了，所以那条路径要关掉这一步。
     """
     created: list[str] = []
     placeholder = f"> 待云端产出回填（{archive_name}）。\n"
@@ -127,8 +132,10 @@ def prebuild(layout: ChapterLayout, archive_name: str, target: Path,
         if not d.exists() and not dry_run:
             d.mkdir(parents=True, exist_ok=True)
 
-    for path, body in ((layout.output_dir / archive_name, placeholder),
-                       (target, placeholder)):
+    targets = [(layout.output_dir / archive_name, placeholder)]
+    if include_target:
+        targets.append((target, placeholder))
+    for path, body in targets:
         if path.exists():
             continue
         created.append(_rel(layout.novel_dir, path))

@@ -143,6 +143,14 @@ def find(entries: list[Entry], part, vol, ch) -> Entry | None:
     return None
 
 
+def latest_key(entries: list[Entry], attr: str) -> tuple | None:
+    """`attr` 传 "manuscript" 或 "outline"：该属性存在（canonical 文件在）的 entry 里
+    `(part, vol, ch)` 最大的那个——正文和细纲的「最新」各自独立判断，不依赖章节号
+    是否跨卷连续编号。"""
+    keys = [e.key for e in entries if getattr(e, attr, None)]
+    return max(keys) if keys else None
+
+
 # ================================================================ 数据模型：部/卷容器
 
 @dataclass

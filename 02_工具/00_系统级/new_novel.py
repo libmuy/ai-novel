@@ -11,8 +11,7 @@
   2. 从 00_通用模板/05_项目骨架模板/ 复制骨架到 01_小说数据/<NN>_<小说名>/
   3. 建相对符号链接 00_通用模板 -> ../../00_通用模板
   4. 由 00_通用模板/00_小说级AGENTS模板.md 生成 AGENTS.md（去用法说明段、替换占位符）
-  5. 改 00_进度.md 标题
-  6. 打印目录树与自检结果
+  5. 打印目录树与自检结果（含 00_进度.json 骨架可解析）
 
 后续云端规划由技能 07_新建小说.md 交接。
 """
@@ -28,6 +27,9 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fi
 SKELETON = os.path.join(REPO_ROOT, "00_通用模板", "05_项目骨架模板")
 AGENTS_TEMPLATE = os.path.join(REPO_ROOT, "00_通用模板", "00_小说级AGENTS模板.md")
 DATA_DIR = os.path.join(REPO_ROOT, "01_小说数据")
+
+sys.path.insert(0, os.path.join(REPO_ROOT, "02_工具", "01_小说通用工具"))
+import progress_store  # noqa: E402
 
 TOP_DIRS = ["01_设定", "02_数据库", "03_规划", "05_工作区", "10_正文"]
 
@@ -97,7 +99,6 @@ def main():
     print(f"  1. copytree {os.path.relpath(SKELETON, REPO_ROOT)} -> {os.path.relpath(dest, REPO_ROOT)}")
     print(f"  2. symlink  {os.path.relpath(dest, REPO_ROOT)}/00_通用模板 -> ../../00_通用模板")
     print(f"  3. 生成     {os.path.relpath(dest, REPO_ROOT)}/AGENTS.md（占位符 {{{{小说名}}}}->{name} / {{{{NN}}}}->{nn}）")
-    print(f"  4. 改标题   {os.path.relpath(dest, REPO_ROOT)}/00_进度.md")
 
     if args.dry_run:
         print("\n[Dry-run] 未写盘。")
@@ -109,13 +110,6 @@ def main():
     agents_path = os.path.join(dest, "AGENTS.md")
     with open(agents_path, "w", encoding="utf-8") as f:
         f.write(render_agents(name, nn))
-
-    prog_path = os.path.join(dest, "00_进度.md")
-    if os.path.exists(prog_path):
-        txt = open(prog_path, encoding="utf-8").read()
-        txt = re.sub(r"^# .*?· 进度追踪", f"# {name} · 进度追踪", txt, count=1, flags=re.M)
-        with open(prog_path, "w", encoding="utf-8") as f:
-            f.write(txt)
 
     print("\n=== 目录树 ===")
     print(f"{nn}_{name}/")
@@ -133,6 +127,11 @@ def main():
     checks.append(("00_基线状态/00_说明.md", os.path.isfile(os.path.join(dest, "05_工作区", "02_状态", "00_基线状态", "00_说明.md"))))
     checks.append(("无逐章 03_本章初始状态.md", not any(
         "03_本章初始状态.md" in fs for _r, _d, fs in os.walk(dest))))
+    try:
+        progress_ok = progress_store.load(dest) == {}
+    except progress_store.ProgressFormatError:
+        progress_ok = False
+    checks.append(("00_进度.json 可解析且为空骨架", progress_ok))
     ok = True
     for label, passed in checks:
         print(f"  [{'x' if passed else ' '}] {label}")

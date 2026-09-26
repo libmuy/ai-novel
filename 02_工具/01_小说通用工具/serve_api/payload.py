@@ -1,10 +1,16 @@
 # -*- coding: utf-8 -*-
-"""`/api/book` `/api/level` `/api/backfill*` 的响应体拼装。"""
+"""`/api/book` `/api/level` `/api/backfill*` `/api/withdraw` 的响应体拼装。"""
+import datetime
 from pathlib import Path
 
+import progress_store
 from prompt_build import layout as L  # noqa: E402
 
-from . import files, model
+from . import files, jobs, model
+
+
+class WithdrawConflict(Exception):
+    """撤下请求被拒绝（不是最新章 / 细纲被正文挡住 / 有任务在跑）——映射 409。"""
 
 _SEC_LABEL = {"work": "工作区", "plan": "规划", "text": "正文"}
 _STATE_TAG = {"有音频": "neutral", "有正文": "neutral", "细纲已出": "outline", "待细纲": "accent"}
@@ -50,12 +56,14 @@ def _level_payload(novel_dir: Path, sec: str, part, vol, ch, title: str, tree, e
         if cnode is None:
             return 404, {"error": "not found"}
         title_bits = f"第 {ch} 章" + (f" · {cnode['title']}" if cnode["title"] else "")
+        e = model.find(entries, part, vol, ch)
         return 200, {
             "level": "ch", "kicker": f"{sec_label} · 章", "title": title_bits,
             "meta": f"第 {part} 部 卷 {vol:02d} · {cnode['state']}",
             "children": None,
             "file_groups": files._level_file_groups(novel_dir, sec, "ch", part, vol, ch, entries),
-            "chapter": {"n": ch, "prev": prev_n, "next": next_n},
+            "chapter": {"n": ch, "prev": prev_n, "next": next_n,
+                        "withdraw": _withdraw_info(entries, e, part, vol, ch)},
         }
 
     if vol is not None:
@@ -101,6 +109,26 @@ def _level_payload(novel_dir: Path, sec: str, part, vol, ch, title: str, tree, e
     }
 
 
+def _withdraw_info(entries, e, part: int, vol: int, ch: int) -> dict:
+    """`chapter.withdraw`：正文/细纲各自算「这章是不是全书当前最新一章」，
+    供审查台决定是显示「撤下重新生成」按钮还是只显示提醒文字。"""
+    key = (part, vol, ch)
+
+    def info(attr: str) -> dict:
+        exists = bool(e and getattr(e, attr, None))
+        lk = model.latest_key(entries, attr)
+        latest_label = None
+        if lk:
+            lp, lv, lc = lk
+            latest_label = f"第 {lp} 部 卷 {lv:02d} 第 {lc} 章"
+        return {"exists": exists, "latest": exists and lk == key, "latest_label": latest_label}
+
+    manuscript = info("manuscript")
+    outline = info("outline")
+    outline["blocked_by_manuscript"] = outline["exists"] and manuscript["exists"]
+    return {"manuscript": manuscript, "outline": outline}
+
+
 # ================================================================ 回填
 
 def _backfill_targets(novel_dir: Path, part, vol, ch, tree) -> list[dict]:
@@ -139,3 +167,98 @@ def _do_backfill(novel_dir: Path, src_rel: str, target_id: str, part, vol, ch, t
         elif target == lay.manuscript:
             result["mode"] = "manuscript"
     return result
+
+
+# ================================================================ 撤下重新生成
+
+_ARCHIVE_STEM = {"manuscript": "01_正文生成", "outline": "00_单章细纲"}
+
+
+def _unique_archive_path(output_dir: Path, stem: str, ts: str) -> Path:
+    base = f"{stem}_旧稿_{ts}"
+    p = output_dir / f"{base}.md"
+    n = 2
+    while p.exists():
+        p = output_dir / f"{base}_{n}.md"
+        n += 1
+    return p
+
+
+def _do_withdraw(novel_dir: Path, part: int, vol: int, ch: int, kind: str) -> dict:
+    if kind not in ("manuscript", "outline"):
+        raise ValueError(f"非法 kind：{kind}")
+
+    lay = L.resolve(novel_dir, part, vol, ch)
+    canon = lay.manuscript if kind == "manuscript" else lay.outline
+    if not canon.is_file():
+        raise FileNotFoundError(f"{L.rel(novel_dir, canon)} 不存在，没有可撤的内容")
+
+    # 不信任前端传来的「是不是最新」判断，按当前磁盘状态重新算一次。
+    entries = model.scan(novel_dir)
+    e = model.find(entries, part, vol, ch)
+    lk = model.latest_key(entries, kind)
+    if lk != (part, vol, ch):
+        label = None
+        if lk:
+            lp, lv, lc = lk
+            label = f"第 {lp} 部 卷 {lv:02d} 第 {lc} 章"
+        raise WithdrawConflict(
+            f"本章之后已有更晚的定稿章节（最新：{label}）；改早期已定稿章节请走技能 "
+            f"`00_通用模板/03_任务技能/02_小说级/06_章节回溯修改.md`"
+            f"（dry-run 确认后再重折状态，这里不做自动化）")
+
+    if kind == "outline" and e and e.manuscript:
+        raise WithdrawConflict("本章正文还在——细纲是正文的输入，先撤正文，再撤细纲")
+
+    id_key = f"{part}/{vol}/{ch}"
+    with jobs._RUNNING_LOCK:
+        busy = any(k.endswith(f":{id_key}") for k in jobs._RUNNING_KEYS)
+    if busy:
+        raise WithdrawConflict("本章有任务在跑，等它结束再撤")
+
+    # 先探路：JSON 非法就整个中止，不碰任何文件。
+    progress_store.load(novel_dir)
+
+    ts = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    stem = _ARCHIVE_STEM[kind]
+    dest = _unique_archive_path(lay.output_dir, stem, ts)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    canon.rename(dest)
+
+    rel_key = L.rel(novel_dir, canon)
+    try:
+        progress_cleared = progress_store.remove(novel_dir, rel_key)
+    except Exception:
+        dest.rename(canon)  # 回滚：canonical 位置和进度表登记必须一致
+        raise
+
+    audio_archived: list[str] = []
+    warnings: list[str] = []
+    if kind == "manuscript":
+        audio_dir = e.audio_dir if e else None
+        if audio_dir and audio_dir.is_dir():
+            cid = f"章{ch:04d}"
+            for p in sorted(audio_dir.glob(f"{cid}*")):
+                if p.suffix not in (".mp3", ".json"):
+                    continue
+                new_p = p.with_name(f"{p.stem}_旧稿_{ts}{p.suffix}")
+                p.rename(new_p)
+                audio_archived.append(L.rel(novel_dir, new_p))
+        state_path = lay.state_dir / "01_状态履历.md"
+        if state_path.exists():
+            warnings.append(
+                f"{L.rel(novel_dir, state_path)} 已经写过——新稿定稿后要按技能 "
+                f"`03_章节状态对账.md` 重写重折")
+        landing = lay.state_dir / "03_细纲落地核对.md"
+        if landing.exists():
+            warnings.append(f"{L.rel(novel_dir, landing)} 是针对旧稿的落地核对表，新稿出来后要重做")
+        review = lay.state_dir / "02_正文校验记录.md"
+        if review.exists():
+            warnings.append(f"{L.rel(novel_dir, review)} 里的冷读记录是针对旧稿的，新稿出来后要重新冷读")
+
+    return {
+        "ok": True, "kind": kind,
+        "archived_from": rel_key, "archived_to": L.rel(novel_dir, dest),
+        "progress_cleared": progress_cleared,
+        "audio_archived": audio_archived, "warnings": warnings,
+    }

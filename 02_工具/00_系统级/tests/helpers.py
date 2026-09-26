@@ -2,11 +2,28 @@
 """测试辅助工具：造合成小说目录结构、写状态表、LLM 桩。"""
 
 import hashlib
+import json
 import os
 import sys
 
-# 确保能导入 state_tree / _llm
+# 确保能导入 state_tree / _llm / progress_store
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "01_小说通用工具"))
+
+
+def write_progress(novel_dir, mapping):
+    """写 `00_进度.json`。`mapping` 是 `{路径: "定稿"}` 或
+    `{路径: {"status": "定稿", "date": "2026-09-05"}}` 的混合写法都行。"""
+    files = {}
+    for key, v in mapping.items():
+        files[key] = {"status": v} if isinstance(v, str) else dict(v)
+    obj = {"version": 1, "files": files}
+    dst = os.path.join(str(novel_dir), "00_进度.json")
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    with open(dst, "w", encoding="utf-8") as f:
+        json.dump(obj, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+    return dst
 
 NOVEL_STRUCTURE = {
     "01_设定": {},

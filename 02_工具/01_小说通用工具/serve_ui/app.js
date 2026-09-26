@@ -55,6 +55,7 @@ const API = {
   deleteFile: (path) => fetchJSON("DELETE", "/api/file?" + q({ path })),
   backfillTargets: (part, vol, ch) => fetchJSON("GET", "/api/backfill-targets?" + q({ part, vol, ch })),
   backfill: (body) => fetchJSON("POST", "/api/backfill", body),
+  withdraw: (body) => fetchJSON("POST", "/api/withdraw", body),
   createJob: (body) => fetchJSON("POST", "/api/jobs", body),
   getJob: (id) => fetchJSON("GET", "/api/jobs/" + id),
 };
@@ -102,7 +103,7 @@ const S = {
   backfillTargets: null, fillIdx: "0",
   coldMode: "manuscript", cr: loadCR(),
   audioPerScene: false, voiceIdx: "0",
-  job: null, jobPoll: null,
+  job: null, jobPoll: null, withdrawing: false,
   vw: window.innerWidth, pane: "list",
 };
 
@@ -772,6 +773,23 @@ async function loadBackfillTargets() {
   } catch (e) { fail(e); }
 }
 
+async function doWithdraw(kind) {
+  if (S.withdrawing) return;
+  S.withdrawing = true; render();
+  try {
+    const r = await API.withdraw({ part: S.part, vol: S.vol, ch: S.ch, kind });
+    const patch = { withdrawing: false, forceRegen: true,
+      flash: `已把 ${r.archived_from} 移到 ${r.archived_to}，进度表登记已清除`
+        + (r.warnings && r.warnings.length ? "。" + r.warnings.join("；") : "") };
+    if (S.file === r.archived_from) { patch.file = null; patch.fileData = null; }
+    setState(patch);
+    await refreshAll(true);
+  } catch (e) {
+    setState({ withdrawing: false });
+    fail(e);
+  }
+}
+
 async function doBackfill(cold) {
   if (!S.file) return flash("请先在左侧打开一个文件作为回填来源");
   const targets = S.backfillTargets || [];
@@ -1018,7 +1036,7 @@ function fileList(sticky) {
   const listStyle = "flex:1 1 240px;min-width:220px;display:flex;flex-direction:column;gap:var(--space-8)"
     + (sticky ? ";position:sticky;top:var(--head-h,130px);align-self:flex-start" : "");
   return h("div", { class: "file-list", style: listStyle },
-    groups, childrenBlock,
+    childrenBlock, groups,
     isEmpty ? h("div", { style: "font-size:13px;color:var(--color-neutral-500);padding:var(--space-6);background:var(--color-surface);border-radius:var(--radius-md)" },
       S.sec === "text" ? "本级尚无定稿正文。" : "本级暂无内容。") : null);
 }
@@ -1132,6 +1150,38 @@ function jobLogBox() {
     }, S.job.log) : null);
 }
 
+// 章级「撤下重新生成」：只在这一版是全书当前最新一章时给按钮，否则只给提醒文字，
+// 不做任何文件操作——早期已定稿章节改用 06_章节回溯修改.md，这里不自动化状态重折。
+function withdrawBlock(cmdId) {
+  const l = S.level;
+  const w = l.chapter && l.chapter.withdraw;
+  if (!w) return null;
+  const kind = cmdId === "draft" ? "manuscript" : "outline";
+  const info = w[kind];
+  const noteStyle = "font-size:12.5px;color:var(--color-neutral-400);padding:var(--space-3);"
+    + "background:var(--color-neutral-900);border-radius:var(--radius-md)";
+  if (!info || !info.exists) return null;
+  if (kind === "outline" && info.blocked_by_manuscript) {
+    return h("div", { style: noteStyle }, "本章正文还在——先到「单章正文提示词」撤下正文，再撤细纲。");
+  }
+  if (!info.latest) {
+    return h("div", { style: noteStyle },
+      `本章不是全书最新一章（最新：${info.latest_label || "—"}），不能直接撤下重写。`
+      + "改早期已定稿章节请走技能 ", h("code", { class: "mono" }, "06_章节回溯修改.md"),
+      "（dry-run 确认后再重折状态，这里不做自动化）。");
+  }
+  const label = kind === "manuscript" ? "正文" : "细纲";
+  return h("div", { style: "display:flex;flex-direction:column;gap:var(--space-2);padding:var(--space-3);"
+    + "background:var(--color-neutral-900);border-radius:var(--radius-md)" },
+    h("div", { style: "font-size:12px;color:var(--color-neutral-400)" },
+      `会把当前${label}移到本章 01_模型输出/ 留档并加时间戳，同时删掉 00_进度.json 里对应的登记。`),
+    h("button", {
+      class: "btn btn-ghost", style: "font-size:13px;align-self:flex-start",
+      disabled: S.withdrawing || null,
+      onClick: () => doWithdraw(kind),
+    }, icon("ph-arrow-counter-clockwise", 15), S.withdrawing ? "撤下中…" : `撤下本章${label}，重新生成`));
+}
+
 function cmdPanel() {
   const l = S.level;
   const ids = LEVEL_CMDS[l.level] || [];
@@ -1154,6 +1204,7 @@ function cmdPanel() {
       jobLogBox());
   } else if (cmdId === "outline_ch" || cmdId === "draft") {
     body = h("div", { style: "display:flex;flex-direction:column;gap:var(--space-4)" },
+      withdrawBlock(cmdId),
       h("div", { class: "field" }, h("label", {}, "附加要求（复制时才拼进去，不写进存档）"),
         h("textarea", {
           class: "input", placeholder: "例：本章收束伏笔 B，节奏偏紧", style: "font-size:13px;min-height:60px",

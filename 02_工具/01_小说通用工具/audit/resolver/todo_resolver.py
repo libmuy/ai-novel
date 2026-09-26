@@ -3,12 +3,18 @@ TODO 解析器 (todo_resolver.py)
 解析 TODO 描述的目标对象、ID、状态, 并关联仓库实体
 """
 import re
+import sys
+from pathlib import Path
 from typing import List, Optional, Dict, Tuple, Any
 from ..models import TodoItem, FileInfo
 from ..context import AuditContext
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+import progress_store  # noqa: E402
+
 TODO_PATTERN = re.compile(r"@(地名|势力|人物|类型|书籍|伏笔)\.\[TODO-([^\]]+)\]")
-# 各占位符类型 -> 在 00_进度.md 里唯一标识该类「源分类」所在行的关键字。
+# 各占位符类型 -> 在 00_进度.json 里唯一标识该类「源分类」的 key（目录 key 精确匹配，
+# 文件 key 按后缀匹配，见 progress_store.category_status）。
 # 取各分类的权威产出目录/文件路径（稳定，不随提示词编号体系变动）。
 CATEGORY_KEYWORD_IN_PROGRESS = {
     "地名": "02_数据库/02_地理区域/",
@@ -18,8 +24,6 @@ CATEGORY_KEYWORD_IN_PROGRESS = {
     "书籍": "02_数据库/06_书籍/",
     "伏笔": "规划_卷01.md",  # 伏笔在「单卷完整大纲」任务里落位，取其大纲行
 }
-# 成熟度标记（用于从 00_进度.md 表行里挑出「状态」单元格）
-_MATURITY_MARKERS = ("定稿", "待校验", "草稿")
 TODO_GLOBAL_PREFIXES = {"FC", "CH", "FH", "BK", "DN"}
 
 
@@ -71,23 +75,13 @@ class TodoResolver:
         }
 
     def _parse_progress_status(self) -> Dict[str, str]:
-        prog_fi = self.context.file_map.get("00_进度.md")
+        try:
+            sts = progress_store.statuses(self.context.novel_dir)
+        except progress_store.ProgressFormatError:
+            return {}  # 格式非法由 progress 规则的 PROGRESS008 单独报，这里不重复
         status = {}
-        if not prog_fi:
-            return status
-        for line in prog_fi.content.splitlines():
-            line = line.strip()
-            if not line.startswith("|"):
-                continue
-            for todo_type, keyword in CATEGORY_KEYWORD_IN_PROGRESS.items():
-                if keyword in line:
-                    cells = [c.strip() for c in line.strip("|").split("|")]
-                    if not cells:
-                        continue
-                    # 优先取含成熟度标记的单元格（「状态」列），回退到最后一格
-                    cell = next(
-                        (c for c in cells if any(m in c for m in _MATURITY_MARKERS)),
-                        cells[-1],
-                    )
-                    status[todo_type] = cell
+        for todo_type, keyword in CATEGORY_KEYWORD_IN_PROGRESS.items():
+            st = progress_store.category_status(sts, keyword)
+            if st is not None:
+                status[todo_type] = st
         return status

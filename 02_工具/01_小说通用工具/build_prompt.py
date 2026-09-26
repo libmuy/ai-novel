@@ -20,10 +20,11 @@
     --dry-run     只报告，不写任何文件
     --force       覆盖已存在的提示词存档（默认只创建、不覆盖）
     --no-prebuild 不预建回填 / 目标空文件
+    --no-prebuild-target 预建回填空文件，但不预建 canonical 目标文件
 
 四段流程
 --------
-    GATE      只查 canonical 数据成熟度（`00_进度.md` 里必读前置是否「定稿」）。
+    GATE      只查 canonical 数据成熟度（`00_进度.json` 里必读前置是否「定稿」）。
               不过 → 只出阻断报告，一个文件都不写。
     PREPARE   物化本章派生输入：
                 · 开篇状态  —— 确定性折叠（`build_state_snapshot.py --chapter-opener`）
@@ -62,11 +63,25 @@ def _gate(ctx: assemble.Ctx, task: str) -> list[progress.Blocker]:
     lay = ctx.layout
     blockers: list[progress.Blocker] = []
 
-    if not idx.exists:
+    if idx.error:
         blockers.append(progress.Blocker(
-            "小说缺 `00_进度.md`，无法判定任何前置的成熟度",
-            progress.PROGRESS_FILE, None, "存在并登记各产出成熟度",
-            "按骨架模板补建 `00_进度.md`"))
+            f"`{progress.PROGRESS_FILE}` 格式非法：{idx.error}",
+            progress.PROGRESS_FILE, None, "合法 JSON，符合 schema",
+            f"按报错信息修好 `{progress.PROGRESS_FILE}`（key 必须是 canonical 路径，"
+            f"value 只允许 status/date）"))
+        return blockers
+
+    if not idx.exists:
+        if idx.legacy:
+            blockers.append(progress.Blocker(
+                "检测到已退休的 `00_进度.md`，还没跑迁移",
+                progress.PROGRESS_FILE, None, "存在并登记各产出成熟度",
+                "跑一次性迁移脚本把 `00_进度.md` 转成 `00_进度.json`"))
+        else:
+            blockers.append(progress.Blocker(
+                f"小说缺 `{progress.PROGRESS_FILE}`，无法判定任何前置的成熟度",
+                progress.PROGRESS_FILE, None, "存在并登记各产出成熟度",
+                f"按骨架模板补建 `{progress.PROGRESS_FILE}`"))
         return blockers
 
     if task == "正文":
@@ -79,7 +94,7 @@ def _gate(ctx: assemble.Ctx, task: str) -> list[progress.Blocker]:
                 "本章细纲未定稿——细纲缺陷会原样复制进之后每一版正文",
                 L.rel(ctx.novel_dir, lay.outline), idx.status_of(lay.outline), "定稿",
                 "跑 `review_manuscript.py --chapter-dir <本章> --mode outline` 收敛必改项，"
-                "清零后在 `00_进度.md` 标定稿"))
+                "清零后在 `00_进度.json` 标定稿"))
         # 开篇状态不在这里 gate：它是派生视图，由 PREPARE 阶段确定性物化；
         # 前序章未折叠导致物化失败会在 PREPARE 里转成阻断项。
         if lay.outline.exists():
@@ -249,6 +264,8 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true", help="只报告，不写文件")
     ap.add_argument("--force", action="store_true", help="覆盖已存在的提示词存档")
     ap.add_argument("--no-prebuild", action="store_true", help="不预建回填/目标空文件")
+    ap.add_argument("--no-prebuild-target", action="store_true",
+                     help="预建回填空文件，但不预建 canonical 目标文件（审查台「撤下重新生成」用）")
     args = ap.parse_args()
 
     if args.chapter_dir:
@@ -339,7 +356,7 @@ def main() -> int:
     print(f"\n已写出　{L.rel(novel_dir, archive)}")
 
     if not args.no_prebuild:
-        created = L.prebuild(lay, archive_name, target)
+        created = L.prebuild(lay, archive_name, target, include_target=not args.no_prebuild_target)
         if created:
             print("已预建　" + "、".join(created))
 
