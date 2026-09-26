@@ -267,7 +267,9 @@ def _chapter_state(e: Entry) -> str:
 
 
 def _chapter_title(e: Entry) -> str:
-    return _first_heading(e.manuscript) or _first_heading(e.outline)
+    # 只认正文自己的标题：本项目正文从不带 # 标题，细纲的 # 标题是「单章细纲 · 第N卷第M章」
+    # 这类自描述文档名，不是章名——借它当章标题，会让「正文」区看着像在显示「规划」内容。
+    return _first_heading(e.manuscript)
 
 
 # ================================================================ 树：部→卷→章（工作区/规划/正文共用）
