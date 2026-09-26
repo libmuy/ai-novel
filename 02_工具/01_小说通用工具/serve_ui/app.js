@@ -975,8 +975,10 @@ function titleBlock() {
 // ---------------------------------------------------------------- 渲染：文件列表 + 下级导航
 
 // sticky=true（桌面端）：文件列表钉在页头下面，长正文读到多深都还在手边。
-// 自带 max-height + 内滚是给「列表比屏幕还长」（根/部级的章节列表）兜底——
-// 钉住的元素不随页面走，不封顶的话底部条目永远够不着；列表短时不会出现滚动条。
+// 不设 max-height / overflow：那样会在页面滚动之外再叠一层列表自己的内滚，两层滚动区域
+// 分别对应鼠标落点，用户很难分清「现在滚的是哪一层」，滚到看着卡住的条目够不着（同样的
+// 教训见 previewPanel 的正文预览）。列表不设内滚上限，跟着页面走——列表比视口还长的
+// 罕见情况下，滚到底部时它会正常跟随页面滚出去，不完美但只有一层，好懂。
 function fileList(sticky) {
   const l = S.level;
   const groups = (l.file_groups || []).map((g) => h("div", {},
@@ -1014,11 +1016,7 @@ function fileList(sticky) {
 
   const isEmpty = groups.length === 0 && !childrenBlock;
   const listStyle = "flex:1 1 240px;min-width:220px;display:flex;flex-direction:column;gap:var(--space-8)"
-    + (sticky
-      ? ";position:sticky;top:var(--head-h,130px);align-self:flex-start;"
-        + "max-height:calc(100vh - var(--head-h,130px));max-height:calc(100dvh - var(--head-h,130px));"
-        + "overflow-y:auto;overscroll-behavior:contain"
-      : "");
+    + (sticky ? ";position:sticky;top:var(--head-h,130px);align-self:flex-start" : "");
   return h("div", { class: "file-list", style: listStyle },
     groups, childrenBlock,
     isEmpty ? h("div", { style: "font-size:13px;color:var(--color-neutral-500);padding:var(--space-6);background:var(--color-surface);border-radius:var(--radius-md)" },
@@ -1260,6 +1258,8 @@ function applyNavHidden() {
   bar.setAttribute("aria-hidden", on ? "true" : "false");
 }
 
+let HEAD_RO = null; // 常驻观察页头高度，见 render() 里的用法
+
 function render() {
   const root = document.getElementById("app");
   root.innerHTML = "";
@@ -1319,9 +1319,19 @@ function render() {
   if (mobile) { wrap.appendChild(topbarMobile()); wrap.appendChild(main); wrap.appendChild(sidebar(true)); }
   else { wrap.appendChild(sidebar(false)); wrap.appendChild(main); }
   root.appendChild(wrap);
-  // 实测页头高度，供钉住的文件列表对齐（top: var(--head-h)）。标题换行、窗口缩放都会
-  // 改变页头高度，而 render() 在 resize 与任务轮询时都会跑，天然跟着更新。
+  // 实测页头高度，供钉住的文件列表贴着页头下沿（top: var(--head-h)），不是量少了就露馅、
+  // 量多了顶多贴得不够紧，不影响能不能滚到——用 ResizeObserver 常驻盯着，字体换掉/标题
+  // 换行/窗口缩放不管什么原因引起的高度变化都会补一次，比只在 resize 事件时测更可靠。
   if (!mobile && head) {
+    if (!HEAD_RO) {
+      HEAD_RO = new ResizeObserver((entries) => {
+        const hh = entries[0].contentRect.height;
+        const m = document.querySelector("main");
+        if (hh > 0 && m) m.style.setProperty("--head-h", Math.ceil(hh) + "px");
+      });
+    }
+    HEAD_RO.disconnect();
+    HEAD_RO.observe(head);
     const hh = head.getBoundingClientRect().height;
     if (hh > 0) main.style.setProperty("--head-h", Math.ceil(hh) + "px");
   }
