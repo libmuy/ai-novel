@@ -30,28 +30,115 @@ class ManuscriptRule(AuditRule):
         stutter_re = re.compile(r"([一-鿿]{4,20})([，,、]\s*)\1")
         resolver = ReferenceResolver(context)
 
-        # MANUSCRIPT003：正文首行是 Markdown 标题（`# 第04章` 之类），
-        # 而同书其它章正文直接以散文起头——体例不一致（正文是读者/TTS 成稿，
-        # 章号在 `00_进度.md` 与目录里，不进散文）。跨章自校准：只在「多数章不带」时报。
-        def _starts_with_heading(fi) -> bool:
+        # MANUSCRIPT003：正文首行的「章名」标题规范。体例 = 首个非空行是 `# 章名`，
+        # 章名逐字照抄单章细纲【基础信息】「章名」字段；章号只进 `00_进度.md`/目录、不进正文。
+        # 三条子判定（同码分列，各自聚合一条 Finding）：
+        #   a) 编号式标题（`# 第NN章 …`）——无论全书体例，一律报；
+        #   b) 首行标题与细纲「章名」字段不一致（细纲存在且填了该字段时才比对）；
+        #   c) 跨章体例自校准（双向）：多数章带标题 → 缺标题的报；多数章散文起头 →
+        #      多带标题的报。这样「全书带标题」与「全书散文起头」两种体例都合法，
+        #      但同书必须一致，且带的那批不能是编号式、不能与细纲对不上。
+        def _first_line(fi) -> str:
             for ln in fi.content.splitlines():
                 if ln.strip():
-                    return bool(heading_re.match(ln))
-            return False
+                    return ln
+            return ""
 
-        offenders = [fi for fi in manuscript_files if _starts_with_heading(fi)]
-        clean_n = len(manuscript_files) - len(offenders)
-        if offenders and clean_n >= max(1, len(manuscript_files) // 2):
+        def _split_path(rel: str):
+            m = re.search(r"(?:正文|规划)_卷(\d+)_章(\d{4})\.md$", rel)
+            return (m.group(1), m.group(2)) if m else None
+
+        def _outline_title(vol: str, chapter_no: str) -> str:
+            """同章单章细纲【基础信息】的「章名」字段值；无细纲/无字段返回 ""。"""
+            for fi in context.files:
+                if fi.data_domain != "03_规划":
+                    continue
+                sp = _split_path(fi.relative_path)
+                if sp and sp == (vol, chapter_no) and fi.relative_path.rsplit("/", 1)[-1].startswith("规划_"):
+                    for ln in fi.content.splitlines():
+                        s = ln.strip()
+                        if not s.startswith("|"):
+                            continue
+                        cells = [c.strip() for c in s.strip("|").split("|")]
+                        if cells and cells[0] == "章名":
+                            return cells[2] if len(cells) >= 3 else (cells[1] if len(cells) == 2 else "")
+            return ""
+
+        numeric: list = []   # a) 编号式标题（同时排除出体例统计，免得再叠一条「缺标题」）
+        mismatch: list = []  # b) 与细纲章名不一致
+        titled = []          # 首行是合规标题的章
+        prose = []           # 首行是散文的章
+        numeric_re = re.compile(r"^#{1,6}\s*第\s*[0-9０-９一二三四五六七八九十百千]+\s*章")
+
+        for fi in manuscript_files:
+            ln = _first_line(fi)
+            if heading_re.match(ln):
+                if numeric_re.match(ln):
+                    numeric.append((fi, ln.strip()))
+                    continue
+                titled.append(fi)
+                sp = _split_path(fi.relative_path)
+                want = _outline_title(*sp) if sp else ""
+                got = re.sub(r"^#{1,6}\s*", "", ln).strip()
+                if want and got != want:
+                    mismatch.append((fi, got, want))
+            else:
+                prose.append(fi)
+
+        if numeric:
             findings.append(Finding(
                 severity=Severity.ERROR,
                 rule=self.name,
                 code="MANUSCRIPT003",
-                message=f"{len(offenders)} 章正文以 Markdown 标题起头，与同书其它 {clean_n} 章体例不一致"
-                        f"（正文直接散文起头，章号进 `00_进度.md`/目录不进正文）",
-                file=offenders[0].relative_path,
+                message=f"{len(numeric)} 章正文以编号式标题起头（{numeric[0][1]!r} 等）——"
+                        f"章号进 `00_进度.md`/目录，不进正文",
+                file=numeric[0][0].relative_path,
                 line=1,
-                suggestion="删掉正文文件开头的 `# 第NN章` 之类标题行；ch1~3 是范式",
-                locations=[f"{fi.relative_path}:第1行" for fi in offenders],
+                suggestion="首行改为 `# 章名`（照抄细纲【基础信息】「章名」字段），或删除标题行",
+                locations=[f"{fi.relative_path}:第1行" for fi, _ in numeric],
+            ))
+
+        if mismatch:
+            findings.append(Finding(
+                severity=Severity.ERROR,
+                rule=self.name,
+                code="MANUSCRIPT003",
+                message=f"{len(mismatch)} 章正文首行标题与细纲【基础信息】「章名」字段不一致"
+                        f"（如正文 {mismatch[0][1]!r} vs 细纲 {mismatch[0][2]!r}）",
+                file=mismatch[0][0].relative_path,
+                line=1,
+                suggestion="细纲「章名」字段是权威——改正文首行对齐它，或改细纲后同步正文",
+                locations=[f"{fi.relative_path}:第1行" for fi, _, _ in mismatch],
+            ))
+
+        total = len(titled) + len(prose)
+        if titled and len(titled) >= max(1, total // 2):
+            # 体例 = 带标题：缺的报
+            missing = [fi for fi in prose]
+            if missing:
+                findings.append(Finding(
+                    severity=Severity.ERROR,
+                    rule=self.name,
+                    code="MANUSCRIPT003",
+                    message=f"{len(missing)} 章正文缺首行章名标题，与同书其它 {len(titled)} 章体例不一致"
+                            f"（本书体例：首行 `# 章名`）",
+                    file=missing[0].relative_path,
+                    line=1,
+                    suggestion="在正文首行补 `# 章名`（照抄细纲【基础信息】「章名」字段）",
+                    locations=[f"{fi.relative_path}:第1行" for fi in missing],
+                ))
+        elif prose and len(prose) >= max(1, total // 2) and titled:
+            # 体例 = 散文起头：多带标题的报（排除已按编号式/不一致报过的，仍按体例列全）
+            findings.append(Finding(
+                severity=Severity.ERROR,
+                rule=self.name,
+                code="MANUSCRIPT003",
+                message=f"{len(titled)} 章正文以 Markdown 标题起头，与同书其它 {len(prose)} 章"
+                        f"「散文直接起头」体例不一致",
+                file=titled[0].relative_path,
+                line=1,
+                suggestion="删掉正文首行标题行，或全书统一改为 `# 章名` 体例并补细纲章名字段",
+                locations=[f"{fi.relative_path}:第1行" for fi in titled],
             ))
 
         for fi in manuscript_files:

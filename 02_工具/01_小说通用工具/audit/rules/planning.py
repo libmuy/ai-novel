@@ -81,6 +81,35 @@ class PlanningRule(AuditRule):
                             locations=[f"{fi.relative_path}:第{fi.content[:mhead.start()].count(chr(10)) + 1}行"]
                         ))
 
+            # PLAN024：单章细纲【基础信息】必须有非空「章名」字段——它是本章标题的唯一权威
+            # （正文首行 `# 章名` 照抄它，MANUSCRIPT003-b 拿它比对；字段缺失时那条比对会静默跳过）。
+            if OUTLINE_FILE_PATTERN.search(fi.relative_path):
+                val, line_no = None, 1
+                for idx2, ln in enumerate(fi.content.splitlines(), 1):
+                    s = ln.strip()
+                    if s.startswith("|"):
+                        cells = [c.strip() for c in s.strip("|").split("|")]
+                        if cells and cells[0] == "章名":
+                            val = cells[2] if len(cells) >= 3 else (cells[1] if len(cells) == 2 else "")
+                            line_no = idx2
+                            break
+                if not (val or "").strip():
+                    findings.append(Finding(
+                        severity=Severity.ERROR,
+                        rule=self.name,
+                        code="PLAN024",
+                        message="单章细纲【基础信息】缺「章名」字段或值为空——"
+                                "正文首行标题没有权威来源，与细纲的一致性比对会静默跳过",
+                        file=fi.relative_path,
+                        line=line_no,
+                        source="| 章名 | … |",
+                        target="【基础信息】",
+                        suggestion="在【基础信息】表补 `| 章名 | <4~8字意象式短语> |`（字段定义见 "
+                                   "`02_卡片模板/07_单章细纲模板.md`）",
+                        category="03_规划",
+                        locations=[f"{fi.relative_path}:第{line_no}行"]
+                    ))
+
             # 检查对象引用
             file_refs = resolver.extract_references(fi)
             for ref in file_refs:

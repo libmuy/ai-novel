@@ -1326,8 +1326,11 @@ class TestManifestGolden(TestAssemble):
     # 2026-09-20（钩子规则改写）：`00_通用写作规则.md` 3.3「结尾钩子规则」改写（取消「每3章至少
     #   2重1轻」，改「每章必有钩子 / 强度对齐事件 / 卷级节奏」），细纲提示词内联的
     #   `00_通用写作规则_生成版.md` 随之变化——只有 OUTLINE 哈希变；MANUSCRIPT 走红线包，不受影响。
-    GOLDEN_MANUSCRIPT = "257fedb5ad1a31dfb3a15ee92e4ce05708f0bb80c4088a6af031b922463a705b"
-    GOLDEN_OUTLINE = "b1d528aa01e125356ebf39b315455dfb8c7e6bc0485d047029de9bd38a6cc7c7"
+    # 2026-09-26（章名字段落地）：07_单章细纲模板【基础信息】新增必填「章名」行（OUTLINE
+    #   哈希变，模板整份内联进细纲提示词）；`_output_format()` 正文段改为「首行 `# 章名`
+    #   逐字照抄细纲章名字段」（MANUSCRIPT 哈希变）。
+    GOLDEN_MANUSCRIPT = "2232a16e81180d46e768e6572ad8cac08d059f837c0a39dda4f6bf092ab031da"
+    GOLDEN_OUTLINE = "084871963ec8126c04a3ef64f849914b24a9050b78d57faccda7629e194c6254"
 
     def _hash(self, text):
         import hashlib

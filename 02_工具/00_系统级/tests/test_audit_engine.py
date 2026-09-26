@@ -133,6 +133,64 @@ class TestAuditEngine(unittest.TestCase):
         codes = [f.code for f in ManuscriptRule().run(AuditContext(self.novel_dir))]
         self.assertNotIn("MANUSCRIPT003", codes)
 
+    def test_manuscript003_numeric_title_always_reported(self):
+        """编号式标题（`# 第NN章`）无论全书体例如何，一律报。"""
+        ms = self.novel_dir / "10_正文" / "01_第01部" / "01_卷01"
+        ms.mkdir(parents=True, exist_ok=True)
+        (ms / "正文_卷01_章0001.md").write_text("# 第01章\n\n他睁开了眼。\n", encoding="utf-8")
+        (ms / "正文_卷01_章0002.md").write_text("# 第02章\n\n她转过身。\n", encoding="utf-8")
+
+        m003 = [f for f in ManuscriptRule().run(AuditContext(self.novel_dir))
+                if f.code == "MANUSCRIPT003"]
+        self.assertEqual(len(m003), 1)
+        self.assertIn("编号式", m003[0].message)
+        self.assertEqual(len(m003[0].locations), 2)
+
+    def test_manuscript003_missing_title_when_majority_titled(self):
+        """体例 = 首行 `# 章名` 时，散文起头的章要报缺标题（反向自校准）。"""
+        ms = self.novel_dir / "10_正文" / "01_第01部" / "01_卷01"
+        ms.mkdir(parents=True, exist_ok=True)
+        (ms / "正文_卷01_章0001.md").write_text("# 灯停岩壁\n\n他贴紧了岩柱。\n", encoding="utf-8")
+        (ms / "正文_卷01_章0002.md").write_text("# 石眼九脉\n\n酒碗见了底。\n", encoding="utf-8")
+        (ms / "正文_卷01_章0003.md").write_text("散文直接起头。\n", encoding="utf-8")
+
+        m003 = [f for f in ManuscriptRule().run(AuditContext(self.novel_dir))
+                if f.code == "MANUSCRIPT003"]
+        self.assertEqual(len(m003), 1)
+        self.assertIn("缺首行章名标题", m003[0].message)
+        self.assertTrue(any("章0003" in loc for loc in m003[0].locations))
+
+    def test_manuscript003_outline_title_mismatch(self):
+        """首行标题须与细纲【基础信息】「章名」字段逐字一致。"""
+        ol = self.novel_dir / "03_规划" / "01_第01部" / "01_卷01"
+        ol.mkdir(parents=True, exist_ok=True)
+        (ol / "规划_卷01_章0001.md").write_text(
+            "## 【基础信息】\n\n| 字段 | 值 |\n|---|---|\n| 章节号 | 卷1 第01章 |\n"
+            "| 章名 | 老灰初烫 |\n", encoding="utf-8")
+        ms = self.novel_dir / "10_正文" / "01_第01部" / "01_卷01"
+        ms.mkdir(parents=True, exist_ok=True)
+        (ms / "正文_卷01_章0001.md").write_text("# 灯停岩壁\n\n他贴紧了岩柱。\n", encoding="utf-8")
+
+        m003 = [f for f in ManuscriptRule().run(AuditContext(self.novel_dir))
+                if f.code == "MANUSCRIPT003"]
+        self.assertEqual(len(m003), 1)
+        self.assertIn("不一致", m003[0].message)
+        self.assertIn("老灰初烫", m003[0].message)
+
+    def test_manuscript003_titled_and_matching_outline_is_silent(self):
+        """全书带标题且与细纲章名一致 → 不报。"""
+        ol = self.novel_dir / "03_规划" / "01_第01部" / "01_卷01"
+        ol.mkdir(parents=True, exist_ok=True)
+        (ol / "规划_卷01_章0001.md").write_text(
+            "| 字段 | 值 |\n|---|---|\n| 章名 | 老灰初烫 |\n", encoding="utf-8")
+        ms = self.novel_dir / "10_正文" / "01_第01部" / "01_卷01"
+        ms.mkdir(parents=True, exist_ok=True)
+        (ms / "正文_卷01_章0001.md").write_text("# 老灰初烫\n\n他贴紧了岩柱。\n", encoding="utf-8")
+        (ms / "正文_卷01_章0002.md").write_text("# 石眼九脉\n\n酒碗见了底。\n", encoding="utf-8")
+
+        codes = [f.code for f in ManuscriptRule().run(AuditContext(self.novel_dir))]
+        self.assertNotIn("MANUSCRIPT003", codes)
+
     def test_manuscript004_stutter_phrase(self):
         """同一 4+ 字短语紧邻重复一次（本地编辑删句漏删旧半句的痕迹）→ MANUSCRIPT004 warning。"""
         ms = self.novel_dir / "10_正文" / "01_第01部" / "01_卷01"
@@ -760,6 +818,26 @@ class TestAuditEngine(unittest.TestCase):
             "03_规划/01_第01部/01_卷01/规划_卷01.md",
             "# 卷大纲\n\n## 【场景列表】\n\n随手写的一段，没有场景标题。\n")
         self.assertNotIn("PLAN023", found)
+
+    # ---- planning · PLAN024：单章细纲必须有非空「章名」字段（章标题权威）----
+
+    def test_plan024_missing_chapter_title_field_flagged(self):
+        found = self._run_planning(
+            "03_规划/01_第01部/01_卷01/规划_卷01_章0001.md",
+            "# 细纲\n\n## 【基础信息】\n\n| 字段 | 值 |\n|---|---|\n| 章节号 | 卷1 第01章 |\n")
+        self.assertIn("PLAN024", found)
+
+    def test_plan024_empty_chapter_title_flagged(self):
+        found = self._run_planning(
+            "03_规划/01_第01部/01_卷01/规划_卷01_章0002.md",
+            "# 细纲\n\n| 字段 | 必填 | 内容 |\n|---|---|---|\n| 章名 | (必) |  |\n")
+        self.assertIn("PLAN024", found)
+
+    def test_plan024_filled_chapter_title_ok(self):
+        found = self._run_planning(
+            "03_规划/01_第01部/01_卷01/规划_卷01_章0003.md",
+            "# 细纲\n\n| 字段 | 值 |\n|---|---|\n| 章名 | 老灰初烫 |\n")
+        self.assertNotIn("PLAN024", found)
 
     # ---- redline：常驻红线包蒸馏视图守护（§二·A 第 3 类）----
 

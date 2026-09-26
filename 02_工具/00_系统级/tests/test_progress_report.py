@@ -57,6 +57,12 @@ def build_novel_fixture(temp_dir: Path, **opts) -> Path:
     # 细纲
     if opts.get("outline_exists", True):
         outline_text = """# 第一章细纲
+## 【基础信息】
+| 字段 | 值 |
+|---|---|
+| 章节号 | 第1章 |
+| 章名 | 老灰初烫 |
+
 ## 出场对象
 | 对象 | 出场方式 |
 |---|---|
@@ -749,6 +755,11 @@ class TestPreflightOutline(unittest.TestCase):
         """【场景列表】下没有 `### 第N场景` 标题（PLAN023）→ 结构项拦，判 FAIL。"""
         novel_dir = build_novel_fixture(self.tmp, outline_exists=False)
         _write(novel_dir / "03_规划/01_第01部/01_卷01/规划_卷01_章0001.md", """# 第一章细纲
+## 【基础信息】
+| 字段 | 值 |
+|---|---|
+| 章名 | 老灰初烫 |
+
 ## 出场对象
 | 对象 | 出场方式 |
 |---|---|
